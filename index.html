@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Consolidado Municipal de Salud Ambiental</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark">SA</span>
+        <div>
+          <h1>Salud Ambiental</h1>
+          <p>Consolidado municipal</p>
+        </div>
+      </div>
+
+      <nav class="nav" aria-label="Vistas">
+        <button class="nav-button active" data-view="capture">Captura</button>
+        <button class="nav-button" data-view="summary">Consolidado</button>
+        <button class="nav-button" data-view="catalogs">Catálogos</button>
+      </nav>
+
+      <div class="sidebar-panel">
+        <label for="yearSelect">Año</label>
+        <input id="yearSelect" type="number" min="2020" max="2035" value="2025">
+      </div>
+    </aside>
+
+    <main class="app-shell">
+      <section class="toolbar">
+        <div>
+          <p class="eyebrow">Puerto Cortés</p>
+          <h2 id="viewTitle">Captura mensual por establecimiento</h2>
+        </div>
+        <div class="actions">
+          <button id="exportDengueXlsxBtn">Consolidado Dengue</button>
+          <button id="exportActivitiesXlsxBtn">33 Actividades</button>
+          <button id="exportRabiaXlsxBtn">Rab 05</button>
+          <button id="exportCsvBtn" class="secondary">Exportar CSV</button>
+          <button id="exportJsonBtn" class="secondary">Respaldo JSON</button>
+          <label class="import-button" for="importJsonInput">Importar JSON</label>
+          <input id="importJsonInput" type="file" accept="application/json">
+        </div>
+      </section>
+
+      <section id="captureView" class="view active-view">
+        <div class="filters">
+          <label>
+            Informe
+            <select id="reportSelect"></select>
+          </label>
+          <label>
+            Mes
+            <select id="monthSelect"></select>
+          </label>
+          <label>
+            Establecimiento
+            <select id="facilitySelect"></select>
+          </label>
+        </div>
+
+        <div class="capture-grid">
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <h3 id="captureTitle">Registro</h3>
+                <p id="captureSubtitle"></p>
+              </div>
+              <span id="savedState" class="status-pill">Guardado</span>
+            </div>
+            <div id="dynamicForm" class="form-grid"></div>
+            <div class="form-actions">
+              <button id="clearMonthBtn" class="danger">Limpiar mes del establecimiento</button>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <h3>Avance del mes</h3>
+                <p>Total municipal del informe seleccionado</p>
+              </div>
+            </div>
+            <div id="monthStats" class="stats"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="summaryView" class="view">
+        <div class="filters">
+          <label>
+            Informe
+            <select id="summaryReportSelect"></select>
+          </label>
+          <label>
+            Periodo
+            <select id="periodTypeSelect">
+              <option value="month">Mensual</option>
+              <option value="quarter">Trimestral</option>
+              <option value="semester">Semestral</option>
+              <option value="year">Anual</option>
+            </select>
+          </label>
+          <label>
+            Corte
+            <select id="periodValueSelect"></select>
+          </label>
+        </div>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <div>
+              <h3 id="summaryTitle">Consolidado</h3>
+              <p id="summarySubtitle"></p>
+            </div>
+          </div>
+          <div id="summaryStats" class="stats"></div>
+          <div class="table-wrap">
+            <table id="summaryTable"></table>
+          </div>
+        </section>
+      </section>
+
+      <section id="catalogsView" class="view">
+        <div class="catalog-layout">
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <h3>Establecimientos</h3>
+                <p>Los 12 establecimientos usados para captura y consolidación.</p>
+              </div>
+              <button id="resetFacilitiesBtn" class="secondary">Restaurar</button>
+            </div>
+            <div id="facilityList" class="editable-list"></div>
+            <button id="addFacilityBtn">Agregar establecimiento</button>
+          </section>
+
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <h3>Indicadores del informe</h3>
+                <p>Campos numéricos capturados por cada establecimiento.</p>
+              </div>
+            </div>
+            <label class="stacked">
+              Informe
+              <select id="catalogReportSelect"></select>
+            </label>
+            <div id="fieldList" class="editable-list"></div>
+            <button id="addFieldBtn">Agregar indicador</button>
+          </section>
+
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <h3>Base de datos</h3>
+                <p id="supabaseStatus">Sin conectar</p>
+              </div>
+            </div>
+            <div class="db-settings">
+              <label>
+                Supabase URL
+                <input id="supabaseUrlInput" type="url" placeholder="https://xxxx.supabase.co">
+              </label>
+              <label>
+                Supabase anon key
+                <input id="supabaseAnonKeyInput" type="password" placeholder="eyJhbGciOi...">
+              </label>
+              <div class="form-actions split-actions">
+                <button id="saveSupabaseConfigBtn">Conectar</button>
+                <button id="syncSupabaseBtn" class="secondary">Sincronizar</button>
+                <button id="uploadLocalBtn" class="secondary">Subir datos locales</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
