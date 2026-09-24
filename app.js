@@ -1,6 +1,6 @@
 /**
  * SALUD AMBIENTAL · PUERTO CORTÉS, HONDURAS
- * Sistema de Captura de Campo y Consolidado Municipal
+ * Sistema de Captura de Campo, Bitácora Diaria y Consolidado Municipal
  */
 
 const months = [
@@ -8,8 +8,9 @@ const months = [
   "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
 ];
 
+// Centro de salud principal de Puerto Cortés: Cornelio Moncada
 const defaultFacilities = [
-  "Pto. Cortés", "La Pita", "Travesía", "Saraguayna", "Bajamar", "Fraternidad",
+  "Cornelio Moncada", "La Pita", "Travesía", "Saraguayna", "Bajamar", "Fraternidad",
   "Puente Alto", "Baracoa", "Calán", "Caoba", "Medina", "Kele Kele"
 ];
 
@@ -87,6 +88,88 @@ const defaultReports = {
   }
 };
 
+// Mapeo inteligente de actividades de bitácora diaria a reportes mensuales
+const logFieldMapping = {
+  viviendas_inspeccionadas: [
+    { reportId: "dengue", fieldSlug: "viviendas_inspeccionadas" }
+  ],
+  viviendas_positivas: [
+    { reportId: "dengue", fieldSlug: "viviendas_positivas" }
+  ],
+  viviendas_abatizadas: [
+    { reportId: "dengue", fieldSlug: "viviendas_abatizadas" },
+    { reportId: "actividades", fieldSlug: "no_de_viviendas_abatizadas_bti" }
+  ],
+  viviendas_nebulizadas: [
+    { reportId: "dengue", fieldSlug: "viviendas_nebulizadas" },
+    { reportId: "actividades", fieldSlug: "no_de_viviendas_fumigadas_nebulizadas" }
+  ],
+  criaderos_eliminados: [
+    { reportId: "dengue", fieldSlug: "criaderos_eliminados" },
+    { reportId: "actividades", fieldSlug: "eliminacion_de_criaderos_de_vectores" }
+  ],
+  depositos_inspeccionados: [
+    { reportId: "dengue", fieldSlug: "depositos_inspeccionados" }
+  ],
+  depositos_positivos: [
+    { reportId: "dengue", fieldSlug: "depositos_positivos" }
+  ],
+  depositos_eliminados: [
+    { reportId: "dengue", fieldSlug: "depositos_eliminados" }
+  ],
+  bti_gramos: [
+    { reportId: "dengue", fieldSlug: "bti_becto_vac_gramos" }
+  ],
+  deltametrina_litros: [
+    { reportId: "dengue", fieldSlug: "deltametrina_litros" }
+  ],
+  aquareslin_litros: [
+    { reportId: "dengue", fieldSlug: "aquareslin_litros" }
+  ],
+  solfac_litros: [
+    { reportId: "dengue", fieldSlug: "solfac_litros" }
+  ],
+  caninos_vacunados: [
+    { reportId: "rabia", fieldSlug: "caninos_vacunados" },
+    { reportId: "actividades", fieldSlug: "vacunacion_canina_y_felina", isCanineFeline: true }
+  ],
+  felinos_vacunados: [
+    { reportId: "rabia", fieldSlug: "felinos_vacunados" },
+    { reportId: "actividades", fieldSlug: "vacunacion_canina_y_felina", isCanineFeline: true }
+  ],
+  viviendas_visitadas_rabia: [
+    { reportId: "rabia", fieldSlug: "viviendas_visitadas" }
+  ],
+  canes_observados: [
+    { reportId: "rabia", fieldSlug: "canes_observados" },
+    { reportId: "actividades", fieldSlug: "observacion_a_canes_mordedores" }
+  ],
+  mordeduras_notificadas: [
+    { reportId: "rabia", fieldSlug: "mordeduras_notificadas" }
+  ],
+  charlas_educativas: [
+    { reportId: "rabia", fieldSlug: "charlas_educativas" }
+  ],
+  monitoreo_cloro: [
+    { reportId: "actividades", fieldSlug: "monitoreo_de_cloro_residual_en_sistemas_de_agua" }
+  ],
+  analisis_agua: [
+    { reportId: "actividades", fieldSlug: "analisis_bacteriologico_de_agua_para_consumo_humano" }
+  ],
+  denuncias_atendidas: [
+    { reportId: "actividades", fieldSlug: "denuncias_ambientales_atendidas" }
+  ],
+  seguimiento_inspecciones: [
+    { reportId: "actividades", fieldSlug: "seguimiento_a_inspecciones_ambientales" }
+  ],
+  operativos_limpieza: [
+    { reportId: "actividades", fieldSlug: "coordinacion_de_operativos_de_limpieza" }
+  ],
+  juntas_agua_supervisadas: [
+    { reportId: "actividades", fieldSlug: "juntas_de_agua_supervisadas_o_capacitadas" }
+  ]
+};
+
 const storageKey = "saludAmbientalMunicipal.v1";
 const supabaseConfigKey = "saludAmbientalMunicipal.supabase.v1";
 const deviceFacilityKey = "saludAmbientalMunicipal.deviceFacility";
@@ -114,6 +197,13 @@ function currentYearDefault() {
   return (y >= 2020 && y <= 2035) ? y : 2026;
 }
 
+function migrateFacilityName(name) {
+  if (name === "Pto. Cortés" || name === "Pto. Cortes" || name === "Puerto Cortés" || name === "Puerto Cortes") {
+    return "Cornelio Moncada";
+  }
+  return name;
+}
+
 function loadState() {
   const saved = localStorage.getItem(storageKey);
   if (saved) {
@@ -129,11 +219,35 @@ function loadState() {
           description: defaultReports[reportId].description
         };
       });
+
+      // Migrar Pto. Cortés -> Cornelio Moncada en establecimientos
+      let facilities = (parsed.facilities?.length ? parsed.facilities : defaultFacilities).map(migrateFacilityName);
+      if (!facilities.includes("Cornelio Moncada")) {
+        facilities.unshift("Cornelio Moncada");
+      }
+
+      // Migrar claves de datos históricas de pto_cortes -> cornelio_moncada
+      const entries = {};
+      Object.entries(parsed.entries || {}).forEach(([k, v]) => {
+        const parts = k.split("|");
+        if (parts[3] === "pto_cortes" || parts[3] === "puerto_cortes") {
+          parts[3] = "cornelio_moncada";
+        }
+        entries[parts.join("|")] = v;
+      });
+
+      // Migrar bitácora si existía
+      const dailyLogs = (parsed.dailyLogs || []).map((log) => ({
+        ...log,
+        facility: migrateFacilityName(log.facility)
+      }));
+
       return {
         year: parsed.year || currentYearDefault(),
-        facilities: parsed.facilities?.length ? parsed.facilities : defaultFacilities,
+        facilities,
         reports,
-        entries: parsed.entries || {}
+        entries,
+        dailyLogs
       };
     } catch (error) {
       console.warn("No se pudo leer el respaldo local", error);
@@ -144,7 +258,8 @@ function loadState() {
     year: currentYearDefault(),
     facilities: defaultFacilities,
     reports: defaultReports,
-    entries: {}
+    entries: {},
+    dailyLogs: []
   };
 }
 
@@ -161,16 +276,14 @@ function saveState() {
   }
 }
 
-// Configuración de Supabase (prevalece config.js central, con opción de sobreescribir en localStorage)
+// Configuración de Supabase
 function loadSupabaseConfig() {
   const localSaved = localStorage.getItem(supabaseConfigKey);
   if (localSaved) {
     try {
       const parsed = JSON.parse(localSaved);
       if (parsed.url && parsed.anonKey) return parsed;
-    } catch (e) {
-      // Ignorar error y usar config central
-    }
+    } catch (e) {}
   }
 
   if (typeof DEFAULT_SUPABASE_CONFIG !== "undefined" && DEFAULT_SUPABASE_CONFIG.url && DEFAULT_SUPABASE_CONFIG.anonKey) {
@@ -234,7 +347,7 @@ function setupSupabase() {
     return true;
   } catch (err) {
     supabaseReady = false;
-    setSupabaseStatus(`Error al inicializar: ${err.message}`, false);
+    setSupabaseStatus(`Error: ${err.message}`, false);
     return false;
   }
 }
@@ -255,9 +368,34 @@ function applyRemoteRecords(records) {
   if (!Array.isArray(records)) return;
   records.forEach((record) => {
     const monthIndex = Number(record.month) - 1;
-    const key = entryKey(record.report_id, record.year, monthIndex, record.facility_name);
+    const facName = migrateFacilityName(record.facility_name);
+    const key = entryKey(record.report_id, record.year, monthIndex, facName);
     state.entries[key] = record.values || {};
   });
+  saveState();
+}
+
+function applyRemoteDailyLogs(logs) {
+  if (!Array.isArray(logs)) return;
+  const mergedMap = new Map();
+  // Locales existentes
+  (state.dailyLogs || []).forEach((item) => mergedMap.set(item.id, item));
+  // Remotos de Supabase
+  logs.forEach((log) => {
+    mergedMap.set(log.id, {
+      id: log.id,
+      facility: migrateFacilityName(log.facility_name),
+      date: log.date,
+      year: log.year,
+      month: log.month - 1,
+      shift: log.shift,
+      community: log.community || "",
+      notes: log.notes || "",
+      values: log.values || {},
+      created_at: log.created_at
+    });
+  });
+  state.dailyLogs = Array.from(mergedMap.values());
   saveState();
 }
 
@@ -269,19 +407,27 @@ async function syncFromSupabase() {
   setSupabaseStatus("Sincronizando...", false);
 
   try {
-    const { data, error } = await supabaseClient
+    // 1. Sincronizar registros mensuales
+    const { data: monthlyData, error: monthlyErr } = await supabaseClient
       .from("monthly_entries")
       .select("report_id, year, month, facility_name, values")
       .eq("year", state.year);
 
-    if (error) {
-      setSupabaseStatus(`Error: ${error.message}`, false);
-      return;
+    if (monthlyErr) throw monthlyErr;
+    applyRemoteRecords(monthlyData || []);
+
+    // 2. Sincronizar bitácora diaria
+    const { data: logsData, error: logsErr } = await supabaseClient
+      .from("daily_logs")
+      .select("*")
+      .eq("year", state.year);
+
+    if (!logsErr && logsData) {
+      applyRemoteDailyLogs(logsData);
     }
 
-    applyRemoteRecords(data || []);
     refreshSelectors();
-    setSupabaseStatus(`Sincronizado (${(data || []).length} registros)`, true);
+    setSupabaseStatus(`Sincronizado (${(monthlyData || []).length} consolidados)`, true);
   } catch (err) {
     setSupabaseStatus("Sin conexión al servidor", false);
   }
@@ -294,16 +440,32 @@ async function upsertEntryRemote(reportId, monthIndex, facility, values) {
   const syncDot = $("#syncDot");
   if (syncDot) syncDot.className = "status-indicator syncing";
 
-  const { error } = await supabaseClient
+  await supabaseClient
     .from("monthly_entries")
     .upsert(record, { onConflict: "report_id,year,month,facility_slug" });
-
-  if (error) {
-    console.warn("Fallo al guardar en Supabase:", error.message);
-    setSupabaseStatus(`Error al guardar: ${error.message}`, false);
-    return;
-  }
   setSupabaseStatus("Conectado a Supabase", true);
+}
+
+async function upsertDailyLogRemote(log) {
+  if (!supabaseReady || !supabaseClient || !navigator.onLine) return;
+  const payload = {
+    id: log.id,
+    facility_slug: slug(log.facility),
+    facility_name: log.facility,
+    date: log.date,
+    year: log.year,
+    month: log.month + 1,
+    shift: log.shift,
+    community: log.community || "",
+    notes: log.notes || "",
+    values: log.values || {}
+  };
+  await supabaseClient.from("daily_logs").upsert(payload, { onConflict: "id" });
+}
+
+async function deleteDailyLogRemote(logId) {
+  if (!supabaseReady || !supabaseClient || !navigator.onLine) return;
+  await supabaseClient.from("daily_logs").delete().eq("id", logId);
 }
 
 async function deleteEntryRemote(reportId, monthIndex, facility) {
@@ -328,23 +490,37 @@ async function uploadLocalEntries() {
     return entryRecord(reportId, Number(year), Number(monthIndex), facility, values);
   });
 
-  if (!records.length) {
+  if (!records.length && !state.dailyLogs?.length) {
     alert("No hay datos locales para subir.");
     return;
   }
 
   setSupabaseStatus("Subiendo datos locales...", false);
-  const { error } = await supabaseClient
-    .from("monthly_entries")
-    .upsert(records, { onConflict: "report_id,year,month,facility_slug" });
-
-  if (error) {
-    alert(`Error al subir: ${error.message}`);
-    setSupabaseStatus(`Error al subir: ${error.message}`, false);
-    return;
+  try {
+    if (records.length) {
+      await supabaseClient.from("monthly_entries").upsert(records, { onConflict: "report_id,year,month,facility_slug" });
+    }
+    if (state.dailyLogs?.length) {
+      const logsPayload = state.dailyLogs.map((log) => ({
+        id: log.id,
+        facility_slug: slug(log.facility),
+        facility_name: log.facility,
+        date: log.date,
+        year: log.year,
+        month: log.month + 1,
+        shift: log.shift,
+        community: log.community || "",
+        notes: log.notes || "",
+        values: log.values || {}
+      }));
+      await supabaseClient.from("daily_logs").upsert(logsPayload, { onConflict: "id" });
+    }
+    alert("Datos locales subidos exitosamente a Supabase.");
+    setSupabaseStatus("Datos subidos correctamente", true);
+  } catch (err) {
+    alert(`Error al subir: ${err.message}`);
+    setSupabaseStatus(`Error al subir: ${err.message}`, false);
   }
-  alert(`Se subieron exitosamente ${records.length} registros a la base de datos.`);
-  setSupabaseStatus(`Datos subidos: ${records.length}`, true);
 }
 
 function entryKey(reportId, year, monthIndex, facility) {
@@ -361,7 +537,6 @@ function setEntry(reportId, monthIndex, facility, values) {
   state.entries[key] = values;
   saveState();
 
-  // Debounce para no saturar Supabase con cada tecla
   if (syncDebounceTimer) clearTimeout(syncDebounceTimer);
   syncDebounceTimer = setTimeout(() => {
     void upsertEntryRemote(reportId, monthIndex, facility, values);
@@ -395,11 +570,314 @@ function selectedMonth() {
 }
 
 function selectedFacility() {
-  return $("#facilitySelect")?.value || state.facilities[0] || "Pto. Cortés";
+  return $("#facilitySelect")?.value || state.facilities[0] || "Cornelio Moncada";
 }
 
 function currentFields(reportId) {
   return state.reports[reportId]?.fields || [];
+}
+
+// =====================================================================
+// VISTA 0: BITÁCORA DIARIA DE CAMPO (NUEVA FUNCIONALIDAD)
+// =====================================================================
+
+/**
+ * Consolida automáticamente las jornadas registradas en la bitácora
+ * hacia los informes mensuales (Dengue, Rab 05 y 33 Actividades).
+ */
+function syncLogbookToMonthlyReports(facility, year, monthIndex) {
+  const logs = (state.dailyLogs || []).filter(
+    (l) => l.facility === facility && Number(l.year) === Number(year) && Number(l.month) === Number(monthIndex)
+  );
+
+  // Calcular totales acumulados por actividad en la bitácora
+  const activitySums = {};
+  logs.forEach((log) => {
+    Object.entries(log.values || {}).forEach(([actKey, val]) => {
+      activitySums[actKey] = (activitySums[actKey] || 0) + Number(val || 0);
+    });
+  });
+
+  // Mapear a cada uno de los reportes mensuales
+  const reportUpdates = { dengue: {}, rabia: {}, actividades: {} };
+
+  Object.entries(logFieldMapping).forEach(([actKey, targets]) => {
+    const val = activitySums[actKey] || 0;
+    targets.forEach((target) => {
+      const repObj = reportUpdates[target.reportId];
+      if (repObj) {
+        if (target.isCanineFeline) {
+          // Suma combinada de caninos y felinos para 33 actividades
+          repObj[target.fieldSlug] = (activitySums["caninos_vacunados"] || 0) + (activitySums["felinos_vacunados"] || 0);
+        } else {
+          repObj[target.fieldSlug] = val;
+        }
+      }
+    });
+  });
+
+  // Aplicar las sumas de la bitácora a los registros mensuales respetando campos manuales existentes
+  Object.entries(reportUpdates).forEach(([repId, fieldsToUpdate]) => {
+    const currentEntry = { ...getEntry(repId, monthIndex, facility) };
+    Object.entries(fieldsToUpdate).forEach(([fieldSlug, totalVal]) => {
+      if (totalVal > 0 || currentEntry[fieldSlug] !== undefined) {
+        currentEntry[fieldSlug] = totalVal;
+      }
+    });
+    setEntry(repId, monthIndex, facility, currentEntry);
+  });
+}
+
+function renderLogbook() {
+  const facility = $("#logFacilitySelect")?.value || selectedFacility();
+  const monthIndex = Number($("#logMonthSelect")?.value ?? selectedMonth());
+  const shiftFilter = $("#logShiftFilter")?.value || "all";
+
+  $("#logbookSummaryMeta").textContent = `${facility} · ${months[monthIndex]} ${state.year}`;
+
+  const allLogsForMonth = (state.dailyLogs || []).filter(
+    (l) => l.facility === facility && Number(l.year) === Number(state.year) && Number(l.month) === Number(monthIndex)
+  );
+
+  const filteredLogs = allLogsForMonth.filter((l) => shiftFilter === "all" || l.shift === shiftFilter);
+
+  // Ordenar cronológicamente descendente (más reciente primero)
+  filteredLogs.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  $("#logbookEntryCount").textContent = `${allLogsForMonth.length} jornada${allLogsForMonth.length === 1 ? '' : 's'}`;
+
+  // Resumen mensual de la bitácora
+  const totals = {
+    viviendas_abatizadas: 0,
+    viviendas_nebulizadas: 0,
+    criaderos_eliminados: 0,
+    caninos_vacunados: 0,
+    felinos_vacunados: 0,
+    monitoreo_cloro: 0
+  };
+
+  allLogsForMonth.forEach((log) => {
+    Object.keys(totals).forEach((key) => {
+      totals[key] += Number(log.values?.[key] || 0);
+    });
+  });
+
+  $("#logbookStatsGrid").innerHTML = `
+    <div class="stat-card">
+      <span>Jornadas registradas</span>
+      <strong>${allLogsForMonth.length}</strong>
+    </div>
+    <div class="stat-card">
+      <span>Viviendas abatizadas</span>
+      <strong>${totals.viviendas_abatizadas.toLocaleString("es-HN")}</strong>
+    </div>
+    <div class="stat-card">
+      <span>Viviendas nebulizadas</span>
+      <strong>${totals.viviendas_nebulizadas.toLocaleString("es-HN")}</strong>
+    </div>
+    <div class="stat-card">
+      <span>Criaderos eliminados</span>
+      <strong>${totals.criaderos_eliminados.toLocaleString("es-HN")}</strong>
+    </div>
+    <div class="stat-card">
+      <span>Mascotas vacunadas</span>
+      <strong>${(totals.caninos_vacunados + totals.felinos_vacunados).toLocaleString("es-HN")}</strong>
+    </div>
+    <div class="stat-card">
+      <span>Monitoreos cloro</span>
+      <strong>${totals.monitoreo_cloro.toLocaleString("es-HN")}</strong>
+    </div>
+  `;
+
+  // Lista de jornadas
+  const listEl = $("#logbookList");
+  if (!listEl) return;
+
+  if (filteredLogs.length === 0) {
+    listEl.innerHTML = `
+      <div style="text-align: center; padding: 32px 16px; color: var(--muted);">
+        <p style="font-size: 1.1rem; margin-bottom: 8px;">📓 No hay jornadas registradas para este mes</p>
+        <p style="font-size: 0.85rem;">Presione el botón <strong>"➕ Nueva jornada"</strong> para registrar las actividades de campo del día.</p>
+      </div>
+    `;
+    return;
+  }
+
+  listEl.innerHTML = filteredLogs.map((log) => {
+    const shiftLabels = {
+      manana: { text: "☀️ Mañana", cls: "manana" },
+      tarde: { text: "🌇 Tarde / Noche", cls: "tarde" },
+      completa: { text: "🕒 Jornada completa", cls: "completa" }
+    };
+    const shift = shiftLabels[log.shift] || shiftLabels.manana;
+
+    // Resumen de tags con actividades > 0
+    const activityTags = [];
+    const v = log.values || {};
+    if (v.viviendas_inspeccionadas) activityTags.push(`Viviendas Insp: <strong>${v.viviendas_inspeccionadas}</strong>`);
+    if (v.viviendas_abatizadas) activityTags.push(`Abatizadas: <strong>${v.viviendas_abatizadas}</strong>`);
+    if (v.viviendas_nebulizadas) activityTags.push(`Nebulizadas: <strong>${v.viviendas_nebulizadas}</strong>`);
+    if (v.criaderos_eliminados) activityTags.push(`Criaderos elim: <strong>${v.criaderos_eliminados}</strong>`);
+    if (v.bti_gramos) activityTags.push(`BTI: <strong>${v.bti_gramos}g</strong>`);
+    if (v.deltametrina_litros) activityTags.push(`Deltametrina: <strong>${v.deltametrina_litros}L</strong>`);
+    if (v.caninos_vacunados) activityTags.push(`Canes vac: <strong>${v.caninos_vacunados}</strong>`);
+    if (v.felinos_vacunados) activityTags.push(`Felinos vac: <strong>${v.felinos_vacunados}</strong>`);
+    if (v.monitoreo_cloro) activityTags.push(`Cloro: <strong>${v.monitoreo_cloro}</strong>`);
+
+    return `
+      <div class="log-card">
+        <div class="log-card-header">
+          <div class="log-card-title">
+            <span class="log-date">${log.date}</span>
+            <span class="shift-badge ${shift.cls}">${shift.text}</span>
+            <span class="log-community">📍 ${log.community || 'Comunidad no especificada'}</span>
+          </div>
+          <div class="log-card-actions">
+            <button type="button" class="secondary" data-edit-log="${log.id}">✏️ Editar</button>
+            <button type="button" class="danger" data-delete-log="${log.id}">🗑️</button>
+          </div>
+        </div>
+        ${activityTags.length ? `<div class="log-tags-grid">${activityTags.map(t => `<span class="log-tag">${t}</span>`).join("")}</div>` : ''}
+        ${log.notes ? `<div class="log-notes">📝 "${log.notes}"</div>` : ''}
+      </div>
+    `;
+  }).join("");
+
+  // Acciones de las tarjetas de bitácora
+  listEl.querySelectorAll("[data-edit-log]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const log = state.dailyLogs.find((l) => l.id === btn.dataset.editLog);
+      if (log) openLogModal(log);
+    });
+  });
+
+  listEl.querySelectorAll("[data-delete-log]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      showConfirmDialog(
+        "Eliminar jornada de bitácora",
+        "¿Desea eliminar esta entrada de la bitácora? Se actualizarán automáticamente los totales mensuales.",
+        async () => {
+          const logId = btn.dataset.deleteLog;
+          const log = state.dailyLogs.find((l) => l.id === logId);
+          state.dailyLogs = state.dailyLogs.filter((l) => l.id !== logId);
+          saveState();
+
+          if (log) {
+            syncLogbookToMonthlyReports(log.facility, log.year, log.month);
+            await deleteDailyLogRemote(logId);
+          }
+
+          renderLogbook();
+          renderForm();
+          renderSummary();
+        }
+      );
+    });
+  });
+}
+
+function openLogModal(editingLog = null) {
+  const dialog = $("#logModal");
+  if (!dialog) return;
+
+  const facility = $("#logFacilitySelect")?.value || selectedFacility();
+  const form = $("#logForm");
+  form.reset();
+
+  // Reset de pestañas del modal
+  $$(".log-tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === "vector"));
+  $$(".log-tab-content").forEach((c) => c.classList.toggle("active-tab-content", c.id === "tabVector"));
+
+  if (editingLog) {
+    $("#logModalTitle").textContent = `Editar Jornada · ${editingLog.facility}`;
+    $("#editingLogId").value = editingLog.id;
+    $("#logDateInput").value = editingLog.date;
+    $("#logShiftSelect").value = editingLog.shift;
+    $("#logCommunityInput").value = editingLog.community || "";
+    $("#logNotesInput").value = editingLog.notes || "";
+
+    // Cargar valores en los inputs
+    Object.entries(editingLog.values || {}).forEach(([k, val]) => {
+      const input = $(`#act_${k}`);
+      if (input) input.value = val;
+    });
+  } else {
+    $("#logModalTitle").textContent = `Nueva Jornada · ${facility}`;
+    $("#editingLogId").value = "";
+    // Fecha por defecto: hoy
+    const today = new Date().toISOString().slice(0, 10);
+    $("#logDateInput").value = today;
+    $("#logShiftSelect").value = "manana";
+    $("#logCommunityInput").value = "";
+    $("#logNotesInput").value = "";
+  }
+
+  dialog.showModal();
+}
+
+function saveLogFromModal() {
+  const facility = $("#logFacilitySelect")?.value || selectedFacility();
+  const editingId = $("#editingLogId").value;
+  const dateStr = $("#logDateInput").value;
+  const shift = $("#logShiftSelect").value;
+  const community = $("#logCommunityInput").value.trim();
+  const notes = $("#logNotesInput").value.trim();
+
+  if (!dateStr || !community) {
+    alert("Por favor complete la fecha y la comunidad intervenida.");
+    return;
+  }
+
+  const dateObj = new Date(dateStr + "T12:00:00");
+  const year = dateObj.getFullYear();
+  const month = dateObj.getMonth();
+
+  // Recolectar valores de los campos de actividad
+  const values = {};
+  Object.keys(logFieldMapping).forEach((key) => {
+    const input = $(`#act_${key}`);
+    if (input) {
+      const num = Number(input.value || 0);
+      if (num > 0) values[key] = num;
+    }
+  });
+
+  const logId = editingId || `log_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const logRecord = {
+    id: logId,
+    facility,
+    date: dateStr,
+    year,
+    month,
+    shift,
+    community,
+    notes,
+    values,
+    created_at: new Date().toISOString()
+  };
+
+  if (!state.dailyLogs) state.dailyLogs = [];
+
+  if (editingId) {
+    const idx = state.dailyLogs.findIndex((l) => l.id === editingId);
+    if (idx !== -1) state.dailyLogs[idx] = logRecord;
+  } else {
+    state.dailyLogs.push(logRecord);
+  }
+
+  saveState();
+
+  // Alimentar automáticamente los informes mensuales correspondientes
+  syncLogbookToMonthlyReports(facility, year, month);
+
+  // Sincronizar en segundo plano con Supabase si está disponible
+  void upsertDailyLogRemote(logRecord);
+
+  $("#logModal").close();
+  renderLogbook();
+  renderForm();
+  renderSummary();
+  renderMonitoringGrid();
 }
 
 // =====================================================================
@@ -585,7 +1063,6 @@ function renderMonitoringGrid() {
   html += `</tbody>`;
   table.innerHTML = html;
 
-  // Clic en celda para saltar directamente a captura
   table.querySelectorAll(".monitoring-cell").forEach((cell) => {
     cell.addEventListener("click", () => {
       const fac = cell.dataset.facility;
@@ -770,21 +1247,28 @@ function refreshSelectors() {
 
   monthOptions($("#monthSelect"));
   monthOptions($("#facilityReportMonthSelect"));
+  monthOptions($("#logMonthSelect"));
 
   facilityOptions($("#facilitySelect"));
   facilityOptions($("#facilityReportSelect"));
+  facilityOptions($("#logFacilitySelect"));
   facilityOptions($("#deviceDefaultFacility"));
 
   const savedFacility = localStorage.getItem(deviceFacilityKey);
-  if (savedFacility && state.facilities.includes(savedFacility)) {
-    $("#deviceDefaultFacility").value = savedFacility;
-    $("#facilitySelect").value = savedFacility;
-    $("#facilityReportSelect").value = savedFacility;
-  }
+  const activeFac = (savedFacility && state.facilities.includes(savedFacility))
+    ? savedFacility
+    : state.facilities[0] || "Cornelio Moncada";
+
+  $("#deviceDefaultFacility").value = activeFac;
+  $("#facilitySelect").value = activeFac;
+  $("#facilityReportSelect").value = activeFac;
+  $("#logFacilitySelect").value = activeFac;
+  $("#headerFacilityText").textContent = activeFac;
 
   $("#yearSelect").value = state.year;
 
   renderPeriodValues();
+  renderLogbook();
   renderForm();
   renderFacilityReport();
   renderMonitoringGrid();
@@ -792,7 +1276,6 @@ function refreshSelectors() {
   renderCatalogs();
 }
 
-// Diálogo de confirmación accesible
 function showConfirmDialog(title, message, onConfirm) {
   const dialog = $("#confirmDialog");
   if (!dialog) {
@@ -1188,7 +1671,7 @@ function xlsxActivitiesRows(monthIndexes) {
       xCell(field, 5),
       ...facilityValues.map((value) => xCell(value, 6)),
       xFormula(`SUM(C${rowNumber}:N${rowNumber})`, municipal, 8),
-      xCell(cumulative, 8) // CORRECCIÓN: Valor acumulado anual exacto
+      xCell(cumulative, 8)
     ];
   });
 
@@ -1312,7 +1795,6 @@ function exportCsv() {
   });
 
   const csvRows = [header, ...rows].map((row) => row.map((val) => `"${String(val ?? "").replace(/"/g, '""')}"`).join(","));
-  // \uFEFF asegura compatibilidad UTF-8 completa con tildes y ñ en Excel para Windows
   const csvContent = "\uFEFF" + csvRows.join("\r\n");
   downloadBlob(csvContent, `consolidado_${reportId}_${state.year}.csv`, "text/csv;charset=utf-8");
 }
@@ -1342,6 +1824,8 @@ function switchView(viewName) {
 
   window.scrollTo({ top: 0, behavior: "smooth" });
 
+  if (viewName === "logbook") renderLogbook();
+  if (viewName === "capture") renderForm();
   if (viewName === "facilityReport") renderFacilityReport();
   if (viewName === "supervisor") {
     renderMonitoringGrid();
@@ -1355,7 +1839,7 @@ function setRole(role) {
   $("#roleBtnSupervisor").classList.toggle("active", role === "supervisor");
 
   if (role === "technician") {
-    switchView("capture");
+    switchView("logbook");
   } else {
     switchView("supervisor");
   }
@@ -1377,14 +1861,54 @@ function bindEvents() {
     localStorage.setItem(deviceFacilityKey, fac);
     $("#facilitySelect").value = fac;
     $("#facilityReportSelect").value = fac;
+    $("#logFacilitySelect").value = fac;
+    $("#headerFacilityText").textContent = fac;
+    renderLogbook();
     renderForm();
     renderFacilityReport();
   });
 
-  // Filtros de captura
+  // Eventos de la Bitácora
+  $("#logFacilitySelect")?.addEventListener("change", renderLogbook);
+  $("#logMonthSelect")?.addEventListener("change", renderLogbook);
+  $("#logShiftFilter")?.addEventListener("change", renderLogbook);
+  $("#openNewLogBtn")?.addEventListener("click", () => openLogModal());
+  $("#closeLogModalBtn")?.addEventListener("click", () => $("#logModal")?.close());
+  $("#cancelLogBtn")?.addEventListener("click", () => $("#logModal")?.close());
+
+  // Tabs dentro del modal de bitácora
+  $$(".log-tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      $$(".log-tab-btn").forEach((b) => b.classList.remove("active"));
+      $$(".log-tab-content").forEach((c) => c.classList.remove("active-tab-content"));
+      btn.classList.add("active");
+      const targetId = btn.dataset.tab === "vector" ? "tabVector" : btn.dataset.tab === "rabia" ? "tabRabia" : "tabSaneamiento";
+      $(`#${targetId}`)?.classList.add("active-tab-content");
+    });
+  });
+
+  $("#logForm")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    saveLogFromModal();
+  });
+
+  $("#syncLogbookToMonthlyBtn")?.addEventListener("click", () => {
+    const facility = $("#logFacilitySelect")?.value || selectedFacility();
+    const monthIndex = Number($("#logMonthSelect")?.value ?? selectedMonth());
+    syncLogbookToMonthlyReports(facility, state.year, monthIndex);
+    alert(`Se consolidaron todas las jornadas de la bitácora de ${facility} para ${months[monthIndex]} en los informes mensuales.`);
+    renderForm();
+    renderSummary();
+    renderMonitoringGrid();
+  });
+
+  $("#printLogbookBtn")?.addEventListener("click", () => window.print());
+
+  // Filtros de captura mensual
   $("#facilitySelect")?.addEventListener("change", () => {
     renderForm();
     $("#facilityReportSelect").value = $("#facilitySelect").value;
+    $("#logFacilitySelect").value = $("#facilitySelect").value;
   });
   $("#reportSelect")?.addEventListener("change", () => {
     renderForm();
@@ -1393,6 +1917,7 @@ function bindEvents() {
   $("#monthSelect")?.addEventListener("change", () => {
     renderForm();
     $("#facilityReportMonthSelect").value = $("#monthSelect").value;
+    $("#logMonthSelect").value = $("#monthSelect").value;
   });
 
   // Búsqueda rápida en formulario de captura
@@ -1450,7 +1975,7 @@ function bindEvents() {
   $("#downloadFacilityXlsxBtn")?.addEventListener("click", exportFacilityXlsx);
   $("#exportFacilityXlsxBtn")?.addEventListener("click", exportFacilityXlsx);
 
-  // Subnavegación del Supervisor (Semáforo vs Consolidado)
+  // Subnavegación del Supervisor
   $$(".subnav-tab").forEach((tab) => {
     tab.addEventListener("click", () => {
       $$(".subnav-tab").forEach((t) => t.classList.remove("active"));
@@ -1468,10 +1993,11 @@ function bindEvents() {
   });
   $("#periodValueSelect")?.addEventListener("change", renderSummary);
 
-  // Cambio de año con auto-sincronización remota
+  // Cambio de año
   $("#yearSelect")?.addEventListener("change", async () => {
     state.year = Math.max(2020, Math.min(2035, Number($("#yearSelect").value) || currentYearDefault()));
     saveState();
+    renderLogbook();
     renderForm();
     renderFacilityReport();
     renderMonitoringGrid();
@@ -1541,7 +2067,7 @@ function bindEvents() {
     renderSummary();
   });
 
-  // Base de datos Supabase
+  // Supabase
   $("#saveSupabaseConfigBtn")?.addEventListener("click", async () => {
     const config = {
       url: $("#supabaseUrlInput").value.trim(),
@@ -1556,7 +2082,6 @@ function bindEvents() {
   $("#syncSupabaseBtn")?.addEventListener("click", syncFromSupabase);
   $("#uploadLocalBtn")?.addEventListener("click", uploadLocalEntries);
 
-  // Monitoreo de conectividad del navegador
   window.addEventListener("online", () => {
     setSupabaseStatus("Conexión restablecida", supabaseReady);
     if (supabaseReady) syncFromSupabase();
@@ -1574,7 +2099,6 @@ async function init() {
   bindEvents();
   refreshSelectors();
 
-  // Restaurar rol activo si existe
   const savedRole = localStorage.getItem(userRoleKey) || "technician";
   setRole(savedRole);
 

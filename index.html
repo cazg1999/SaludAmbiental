@@ -23,7 +23,7 @@
       <div class="header-controls">
         <div class="header-pill facility-pill" id="activeFacilityBadge" title="Establecimiento activo">
           <span class="pill-dot"></span>
-          <span id="headerFacilityText">Pto. Cortés</span>
+          <span id="headerFacilityText">Cornelio Moncada</span>
         </div>
 
         <div class="header-pill status-pill-sync" id="syncStatusBadge" title="Estado de sincronización">
@@ -50,7 +50,11 @@
         </div>
 
         <nav class="nav" aria-label="Vistas escritorio">
-          <button class="nav-button active" data-view="capture">
+          <button class="nav-button active" data-view="logbook">
+            <span class="nav-icon">📔</span>
+            <span>Bitácora diaria</span>
+          </button>
+          <button class="nav-button" data-view="capture">
             <span class="nav-icon">📝</span>
             <span>Captura mensual</span>
           </button>
@@ -79,12 +83,78 @@
 
       <!-- Contenido Principal -->
       <main class="app-main">
-        <!-- VISTA 1: CAPTURA (TÉCNICO) -->
-        <section id="captureView" class="view active-view">
+        <!-- VISTA 0: BITÁCORA DIARIA DE CAMPO -->
+        <section id="logbookView" class="view active-view">
           <div class="view-header">
             <div>
-              <span class="eyebrow">Ingreso de Datos de Campo</span>
-              <h2 id="captureTitleHeading">Captura por establecimiento</h2>
+              <span class="eyebrow">Registro Diario de Actividades</span>
+              <h2>Bitácora de Campo</h2>
+            </div>
+            <div class="view-actions">
+              <button type="button" class="primary" id="openNewLogBtn">
+                ➕ Nueva jornada
+              </button>
+              <button type="button" class="secondary" id="syncLogbookToMonthlyBtn" title="Consolidar las jornadas registradas a los informes mensuales">
+                🔄 Consolidar a mes
+              </button>
+              <button type="button" class="secondary" id="printLogbookBtn">
+                🖨️ Imprimir bitácora
+              </button>
+            </div>
+          </div>
+
+          <div class="filter-card">
+            <div class="filters-grid">
+              <label>
+                Establecimiento
+                <select id="logFacilitySelect"></select>
+              </label>
+              <label>
+                Mes
+                <select id="logMonthSelect"></select>
+              </label>
+              <label>
+                Filtrar por turno
+                <select id="logShiftFilter">
+                  <option value="all">Todos los turnos</option>
+                  <option value="manana">☀️ Mañana</option>
+                  <option value="tarde">🌇 Tarde / Noche</option>
+                  <option value="completa">🕒 Jornada completa</option>
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <!-- Resumen de lo registrado en la bitácora este mes -->
+          <div class="panel logbook-summary-card">
+            <div class="panel-heading">
+              <div>
+                <h3>Resumen acumulado de jornadas del mes</h3>
+                <p id="logbookSummaryMeta">Cornelio Moncada · Total acumulado de jornadas registradas</p>
+              </div>
+              <span class="status-pill saved" id="logbookEntryCount">0 jornadas</span>
+            </div>
+            <div id="logbookStatsGrid" class="stats-grid"></div>
+          </div>
+
+          <!-- Lista de jornadas de la bitácora -->
+          <div class="panel">
+            <div class="panel-heading">
+              <div>
+                <h3>Jornadas de trabajo registradas</h3>
+                <p>Las actividades ingresadas aquí alimentan automáticamente los informes mensuales correspondientes.</p>
+              </div>
+            </div>
+            <div id="logbookList" class="logbook-timeline"></div>
+          </div>
+        </section>
+
+        <!-- VISTA 1: CAPTURA (TÉCNICO) -->
+        <section id="captureView" class="view">
+          <div class="view-header">
+            <div>
+              <span class="eyebrow">Totales Mensuales</span>
+              <h2 id="captureTitleHeading">Captura mensual por establecimiento</h2>
             </div>
             <div class="view-actions">
               <button type="button" class="secondary" id="quickViewReportBtn">
@@ -208,7 +278,7 @@
               <div class="report-meta-box">
                 <div class="meta-row">
                   <div><strong>Informe:</strong> <span id="repDocName">Consolidado de Dengue</span></div>
-                  <div><strong>Establecimiento:</strong> <span id="repDocFacility">Baracoa</span></div>
+                  <div><strong>Establecimiento:</strong> <span id="repDocFacility">Cornelio Moncada</span></div>
                 </div>
                 <div class="meta-row">
                   <div><strong>Mes:</strong> <span id="repDocMonth">Enero</span></div>
@@ -404,13 +474,17 @@
 
     <!-- Barra de Navegación Móvil Inferior (Bottom Bar) -->
     <nav class="bottom-nav" aria-label="Navegación móvil">
-      <button type="button" class="bottom-nav-item active" data-view="capture">
+      <button type="button" class="bottom-nav-item active" data-view="logbook">
+        <span class="b-icon">📔</span>
+        <span class="b-label">Bitácora</span>
+      </button>
+      <button type="button" class="bottom-nav-item" data-view="capture">
         <span class="b-icon">📝</span>
         <span class="b-label">Captura</span>
       </button>
       <button type="button" class="bottom-nav-item" data-view="facilityReport">
         <span class="b-icon">📄</span>
-        <span class="b-label">Mi Reporte</span>
+        <span class="b-label">Reporte</span>
       </button>
       <button type="button" class="bottom-nav-item" data-view="supervisor">
         <span class="b-icon">📊</span>
@@ -421,6 +495,185 @@
         <span class="b-label">Ajustes</span>
       </button>
     </nav>
+
+    <!-- Modal de Formulario de Bitácora (Registrar Jornada de Campo) -->
+    <dialog id="logModal" class="app-dialog log-dialog">
+      <form id="logForm">
+        <div class="dialog-content">
+          <div class="panel-heading">
+            <div>
+              <h3 id="logModalTitle">Registrar jornada de campo</h3>
+              <p>Esta información alimentará automáticamente los informes mensuales correspondientes.</p>
+            </div>
+            <button type="button" class="close-dialog-btn" id="closeLogModalBtn" title="Cerrar">✕</button>
+          </div>
+
+          <div class="log-modal-grid">
+            <label>
+              Fecha
+              <input type="date" id="logDateInput" required>
+            </label>
+            <label>
+              Turno / Horario
+              <select id="logShiftSelect" required>
+                <option value="manana">☀️ Mañana (Vacunación, abatización, agua...)</option>
+                <option value="tarde">🌇 Tarde / Noche (Fumigación, nebulización...)</option>
+                <option value="completa">🕒 Jornada completa</option>
+              </select>
+            </label>
+            <label class="col-span-full">
+              Comunidad / Barrio / Sector intervenido
+              <input type="text" id="logCommunityInput" placeholder="Ej: Barrio El Centro, Col. 23 de Abril..." required>
+            </label>
+          </div>
+
+          <!-- Pestañas de categorías de actividad en la jornada -->
+          <div class="log-activity-tabs">
+            <button type="button" class="log-tab-btn active" data-tab="vector">🦟 Dengue / Vectores</button>
+            <button type="button" class="log-tab-btn" data-tab="rabia">🐕 Rabia / Zoonosis</button>
+            <button type="button" class="log-tab-btn" data-tab="saneamiento">💧 Agua y Saneamiento</button>
+          </div>
+
+          <!-- PESTAÑA DENGUE -->
+          <div id="tabVector" class="log-tab-content active-tab-content">
+            <div class="form-grid log-form-grid">
+              <div class="field-item">
+                <label for="act_viviendas_inspeccionadas">Viviendas inspeccionadas</label>
+                <input type="number" min="0" id="act_viviendas_inspeccionadas" placeholder="0">
+              </div>
+              <div class="field-item">
+                <label for="act_viviendas_positivas">Viviendas positivas</label>
+                <input type="number" min="0" id="act_viviendas_positivas" placeholder="0">
+              </div>
+              <div class="field-item">
+                <label for="act_viviendas_abatizadas">Viviendas abatizadas (BTI)</label>
+                <input type="number" min="0" id="act_viviendas_abatizadas" placeholder="0">
+                <small class="field-hint">Alimenta Dengue y 33 Actividades</small>
+              </div>
+              <div class="field-item">
+                <label for="act_viviendas_nebulizadas">Viviendas nebulizadas / fumigadas</label>
+                <input type="number" min="0" id="act_viviendas_nebulizadas" placeholder="0">
+                <small class="field-hint">Alimenta Dengue y 33 Actividades</small>
+              </div>
+              <div class="field-item">
+                <label for="act_criaderos_eliminados">Criaderos eliminados</label>
+                <input type="number" min="0" id="act_criaderos_eliminados" placeholder="0">
+                <small class="field-hint">Alimenta Dengue y 33 Actividades</small>
+              </div>
+              <div class="field-item">
+                <label for="act_depositos_inspeccionados">Depósitos inspeccionados</label>
+                <input type="number" min="0" id="act_depositos_inspeccionados" placeholder="0">
+              </div>
+              <div class="field-item">
+                <label for="act_depositos_positivos">Depósitos positivos</label>
+                <input type="number" min="0" id="act_depositos_positivos" placeholder="0">
+              </div>
+              <div class="field-item">
+                <label for="act_depositos_eliminados">Depósitos eliminados</label>
+                <input type="number" min="0" id="act_depositos_eliminados" placeholder="0">
+              </div>
+              <div class="field-item">
+                <label for="act_bti_gramos">BTI / Becto Vac (Gramos)</label>
+                <input type="number" min="0" id="act_bti_gramos" placeholder="0">
+              </div>
+              <div class="field-item">
+                <label for="act_deltametrina_litros">Deltametrina (Litros)</label>
+                <input type="number" min="0" step="0.1" id="act_deltametrina_litros" placeholder="0">
+              </div>
+              <div class="field-item">
+                <label for="act_aquareslin_litros">AquaReslin (Litros)</label>
+                <input type="number" min="0" step="0.1" id="act_aquareslin_litros" placeholder="0">
+              </div>
+              <div class="field-item">
+                <label for="act_solfac_litros">Solfac (Litros)</label>
+                <input type="number" min="0" step="0.1" id="act_solfac_litros" placeholder="0">
+              </div>
+            </div>
+          </div>
+
+          <!-- PESTAÑA RABIA -->
+          <div id="tabRabia" class="log-tab-content">
+            <div class="form-grid log-form-grid">
+              <div class="field-item">
+                <label for="act_caninos_vacunados">Caninos vacunados</label>
+                <input type="number" min="0" id="act_caninos_vacunados" placeholder="0">
+                <small class="field-hint">Alimenta Rab 05 y 33 Actividades</small>
+              </div>
+              <div class="field-item">
+                <label for="act_felinos_vacunados">Felinos vacunados</label>
+                <input type="number" min="0" id="act_felinos_vacunados" placeholder="0">
+                <small class="field-hint">Alimenta Rab 05 y 33 Actividades</small>
+              </div>
+              <div class="field-item">
+                <label for="act_viviendas_visitadas_rabia">Viviendas visitadas (Rabia)</label>
+                <input type="number" min="0" id="act_viviendas_visitadas_rabia" placeholder="0">
+              </div>
+              <div class="field-item">
+                <label for="act_canes_observados">Canes mordedores observados</label>
+                <input type="number" min="0" id="act_canes_observados" placeholder="0">
+                <small class="field-hint">Alimenta Rab 05 y 33 Actividades</small>
+              </div>
+              <div class="field-item">
+                <label for="act_mordeduras_notificadas">Mordeduras notificadas</label>
+                <input type="number" min="0" id="act_mordeduras_notificadas" placeholder="0">
+              </div>
+              <div class="field-item">
+                <label for="act_charlas_educativas">Charlas educativas realizadas</label>
+                <input type="number" min="0" id="act_charlas_educativas" placeholder="0">
+              </div>
+            </div>
+          </div>
+
+          <!-- PESTAÑA AGUA Y SANEAMIENTO -->
+          <div id="tabSaneamiento" class="log-tab-content">
+            <div class="form-grid log-form-grid">
+              <div class="field-item">
+                <label for="act_monitoreo_cloro">Monitoreo de cloro residual en sistemas</label>
+                <input type="number" min="0" id="act_monitoreo_cloro" placeholder="0">
+                <small class="field-hint">Alimenta 33 Actividades</small>
+              </div>
+              <div class="field-item">
+                <label for="act_analisis_agua">Análisis bacteriológico de agua</label>
+                <input type="number" min="0" id="act_analisis_agua" placeholder="0">
+                <small class="field-hint">Alimenta 33 Actividades</small>
+              </div>
+              <div class="field-item">
+                <label for="act_denuncias_atendidas">Denuncias ambientales atendidas</label>
+                <input type="number" min="0" id="act_denuncias_atendidas" placeholder="0">
+                <small class="field-hint">Alimenta 33 Actividades</small>
+              </div>
+              <div class="field-item">
+                <label for="act_seguimiento_inspecciones">Seguimiento a inspecciones ambientales</label>
+                <input type="number" min="0" id="act_seguimiento_inspecciones" placeholder="0">
+                <small class="field-hint">Alimenta 33 Actividades</small>
+              </div>
+              <div class="field-item">
+                <label for="act_operativos_limpieza">Coordinación de operativos de limpieza</label>
+                <input type="number" min="0" id="act_operativos_limpieza" placeholder="0">
+                <small class="field-hint">Alimenta 33 Actividades</small>
+              </div>
+              <div class="field-item">
+                <label for="act_juntas_agua_supervisadas">Juntas de agua supervisadas/capacitadas</label>
+                <input type="number" min="0" id="act_juntas_agua_supervisadas" placeholder="0">
+                <small class="field-hint">Alimenta 33 Actividades</small>
+              </div>
+            </div>
+          </div>
+
+          <label style="margin-top: 14px;">
+            Observaciones o notas de la jornada
+            <textarea id="logNotesInput" rows="2" placeholder="Ej: Se coordinó con patronato; en la tarde se completó nebulización..."></textarea>
+          </label>
+
+          <input type="hidden" id="editingLogId" value="">
+
+          <div class="dialog-actions" style="margin-top: 18px;">
+            <button type="button" class="secondary" id="cancelLogBtn">Cancelar</button>
+            <button type="submit" class="primary" id="saveLogBtn">💾 Guardar Jornada y Consolidar</button>
+          </div>
+        </div>
+      </form>
+    </dialog>
 
     <!-- Modal de Confirmación Rápido -->
     <dialog id="confirmDialog" class="app-dialog">

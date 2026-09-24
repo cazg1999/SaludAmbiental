@@ -968,7 +968,218 @@ tbody tr:hover {
 }
 
 /* =====================================================================
-   NAVEGACIÓN MÓVIL INFERIOR (BOTTOM BAR)
+   BITÁCORA DE CAMPO (JORNADAS DIARIAS Y TURNOS)
+   ===================================================================== */
+.logbook-summary-card {
+  border-left: 4px solid var(--accent);
+}
+
+.logbook-timeline {
+  display: grid;
+  gap: 12px;
+}
+
+.log-card {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+  display: grid;
+  gap: 8px;
+  transition: transform 0.1s ease, border-color 0.15s ease;
+}
+
+.log-card:hover {
+  border-color: #b0c9c0;
+}
+
+.log-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.log-card-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.log-date {
+  font-weight: 800;
+  font-size: 0.95rem;
+  color: #123027;
+}
+
+.shift-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.shift-badge.manana {
+  background: #fef6e0;
+  color: #8f6005;
+  border: 1px solid #fae29c;
+}
+
+.shift-badge.tarde {
+  background: #fdeee9;
+  color: #a04018;
+  border: 1px solid #f8cdbe;
+}
+
+.shift-badge.completa {
+  background: #e8f5e9;
+  color: #2e7d32;
+  border: 1px solid #c8e6c9;
+}
+
+.log-community {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #2b3b48;
+}
+
+.log-tags-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0;
+}
+
+.log-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #f0f5f3;
+  color: #184c3c;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 0.76rem;
+  border: 1px solid #d7e7e0;
+}
+
+.log-tag strong {
+  color: var(--primary-dark);
+}
+
+.log-notes {
+  font-size: 0.8rem;
+  color: var(--muted);
+  background: #f9fbfb;
+  padding: 6px 10px;
+  border-radius: 4px;
+  border-left: 2px solid #b5d5ca;
+  font-style: italic;
+}
+
+.log-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.log-card-actions button {
+  min-height: 32px;
+  padding: 4px 10px;
+  font-size: 0.78rem;
+}
+
+/* Modal de bitácora */
+.log-dialog {
+  max-width: 680px;
+  width: 95%;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.close-dialog-btn {
+  background: transparent;
+  color: var(--muted);
+  border: 0;
+  font-size: 1.25rem;
+  min-height: auto;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.close-dialog-btn:hover {
+  background: #eeeeee;
+  color: var(--ink);
+}
+
+.log-modal-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.col-span-full {
+  grid-column: 1 / -1;
+}
+
+.log-activity-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  border-bottom: 2px solid var(--line);
+  padding-bottom: 2px;
+  overflow-x: auto;
+}
+
+.log-tab-btn {
+  background: #f1f4f6;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  padding: 7px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.log-tab-btn.active {
+  background: var(--primary);
+  color: #ffffff;
+  border-color: var(--primary);
+}
+
+.log-tab-content {
+  display: none;
+}
+
+.log-tab-content.active-tab-content {
+  display: block;
+}
+
+.log-form-grid {
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.field-hint {
+  display: block;
+  font-size: 0.68rem;
+  color: #1f7a5f;
+  margin-top: 2px;
+  font-weight: 600;
+}
+
+/* =====================================================================
+   NAVEGACIÓN MÓVIL INFERIOR (BOTTOM BAR - 5 PESTAÑAS)
    ===================================================================== */
 .bottom-nav {
   display: none;
@@ -981,7 +1192,7 @@ tbody tr:hover {
   border-top: 1px solid var(--line);
   box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.06);
   z-index: 100;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
 }
 
 .bottom-nav-item {
@@ -989,23 +1200,23 @@ tbody tr:hover {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 3px;
+  gap: 2px;
   background: transparent;
   border: 0;
   color: var(--muted);
-  padding: 4px;
+  padding: 4px 2px;
   min-height: 100%;
   cursor: pointer;
   transition: color 0.15s ease;
 }
 
 .bottom-nav-item .b-icon {
-  font-size: 1.25rem;
+  font-size: 1.15rem;
   line-height: 1;
 }
 
 .bottom-nav-item .b-label {
-  font-size: 0.7rem;
+  font-size: 0.65rem;
   font-weight: 700;
 }
 
