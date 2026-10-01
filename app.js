@@ -2479,6 +2479,19 @@ async function catalogItemInUse(kind, itemSlug, reportId = null) {
 
 let managedUsersCache = [];
 let managedUsersLoading = false;
+const MANAGED_PASSWORD_PATTERN = /^(?=.*[A-Za-z])(?=.*[0-9])[A-Za-z0-9]{6,16}$/;
+const MANAGED_PASSWORD_ERROR = "La contraseña debe tener de 6 a 16 caracteres, usar solo letras y números e incluir al menos una letra y un número.";
+
+function isManagedPasswordValid(password) {
+  return MANAGED_PASSWORD_PATTERN.test(String(password || ""));
+}
+
+function validateManagedPasswordField(input) {
+  const valid = isManagedPasswordValid(input?.value);
+  input?.setCustomValidity(valid ? "" : MANAGED_PASSWORD_ERROR);
+  if (!valid) input?.reportValidity();
+  return valid;
+}
 
 function setUserManagementStatus(message, isError = false) {
   const element = $("#userManagementStatus");
@@ -2572,6 +2585,11 @@ async function refreshManagedUsers() {
 async function createManagedUser(event) {
   event.preventDefault();
   if (currentProfile?.role !== "admin") return;
+  const passwordInput = $("#newUserPassword");
+  if (!validateManagedPasswordField(passwordInput)) {
+    setUserManagementStatus(MANAGED_PASSWORD_ERROR, true);
+    return;
+  }
   const button = $("#createUserBtn");
   if (button) button.disabled = true;
   setUserManagementStatus("Creando usuario...");
@@ -2579,7 +2597,7 @@ async function createManagedUser(event) {
     await invokeUserManagement("create", {
       username: $("#newUsername")?.value,
       displayName: $("#newUserDisplayName")?.value,
-      password: $("#newUserPassword")?.value,
+      password: passwordInput.value,
       role: $("#newUserRole")?.value
     });
     $("#userCreateForm")?.reset();
@@ -2613,7 +2631,12 @@ function openManagedUserPasswordDialog(user) {
 async function updateManagedUserPassword(event) {
   event.preventDefault();
   const userId = $("#userPasswordTargetId")?.value;
-  const password = $("#managedUserNewPassword")?.value || "";
+  const passwordInput = $("#managedUserNewPassword");
+  if (!validateManagedPasswordField(passwordInput)) {
+    setUserManagementStatus(MANAGED_PASSWORD_ERROR, true);
+    return;
+  }
+  const password = passwordInput.value;
   try {
     await invokeUserManagement("set_password", { userId, password });
     $("#userPasswordDialog")?.close();
@@ -3655,8 +3678,10 @@ function bindEvents() {
 
   // Usuarios administrados (solo Admin)
   $("#userCreateForm")?.addEventListener("submit", createManagedUser);
+  $("#newUserPassword")?.addEventListener("input", (event) => event.currentTarget.setCustomValidity(""));
   $("#refreshUsersBtn")?.addEventListener("click", () => void refreshManagedUsers());
   $("#userPasswordForm")?.addEventListener("submit", updateManagedUserPassword);
+  $("#managedUserNewPassword")?.addEventListener("input", (event) => event.currentTarget.setCustomValidity(""));
   $("#cancelUserPasswordBtn")?.addEventListener("click", () => $("#userPasswordDialog")?.close());
 
   // Supabase

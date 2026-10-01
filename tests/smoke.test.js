@@ -11,6 +11,7 @@ const app = read("app.js");
 const html = read("index.html");
 const schema = read("supabase/schema.sql");
 const manageUsers = read("supabase/functions/manage-users/index.ts");
+const supabaseConfig = read("supabase/config.toml");
 
 function bootApp(storageEntries = []) {
   const storage = new Map(storageEntries);
@@ -78,9 +79,20 @@ test("admin user management is server-side and keeps email out of the login UI",
   assert.match(manageUsers, /auth\.admin\.updateUserById/);
   assert.match(manageUsers, /callerRole !== "admin"/);
   assert.match(manageUsers, /"Autenticación requerida\."\s*},\s*401/);
+  assert.equal((manageUsers.match(/managedPasswordPattern\.test\(password\)/g) || []).length, 2);
+  assert.match(html, /id="newUserPassword"[^>]*minlength="6"[^>]*maxlength="16"[^>]*pattern="\(\?=\.\*\[A-Za-z\]\)\(\?=\.\*\[0-9\]\)\[A-Za-z0-9\]\{6,16\}"/);
+  assert.match(html, /id="managedUserNewPassword"[^>]*minlength="6"[^>]*maxlength="16"[^>]*pattern="\(\?=\.\*\[A-Za-z\]\)\(\?=\.\*\[0-9\]\)\[A-Za-z0-9\]\{6,16\}"/);
+  assert.match(supabaseConfig, /minimum_password_length\s*=\s*6/);
+  assert.match(supabaseConfig, /password_requirements\s*=\s*"letters_digits"/);
   assert.doesNotMatch(`${app}\n${html}`, /SUPABASE_SERVICE_ROLE_KEY/);
   const { context } = bootApp();
   assert.equal(vm.runInContext('loginEmailForUsername("tecnico2")', context), "tecnico2@saludambiental.local");
+  assert.equal(vm.runInContext('isManagedPasswordValid("abc123")', context), true);
+  assert.equal(vm.runInContext('isManagedPasswordValid("abcdef")', context), false);
+  assert.equal(vm.runInContext('isManagedPasswordValid("123456")', context), false);
+  assert.equal(vm.runInContext('isManagedPasswordValid("abc12-")', context), false);
+  assert.equal(vm.runInContext('isManagedPasswordValid("ab12")', context), false);
+  assert.equal(vm.runInContext('isManagedPasswordValid("abcdefghijklmnop1")', context), false);
 });
 
 test("database access is authenticated and anonymous CRUD policies are absent", () => {

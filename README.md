@@ -54,7 +54,7 @@ La aplicación usa **Supabase Auth**. La interfaz solicita únicamente nombre de
 | `Supervisor` | `supervisor@saludambiental.local` | Todo excepto Catálogos y ajustes |
 | `Tecnico` | `tecnico@saludambiental.local` | Bitácora, captura mensual y reporte del establecimiento |
 
-Las contraseñas no se incluyen ni se verifican en el código del navegador. Deben configurarse directamente en Supabase Authentication.
+Las contraseñas nunca se guardan en el código del navegador. Al crear o restablecer una cuenta se exige una contraseña de 6 a 16 caracteres, formada únicamente por letras y números y con al menos una letra y un número. Supabase Auth aplica la misma composición y su mínimo técnico de 6 caracteres.
 
 El Administrador dispone además de **Usuarios del sistema** en Catálogos y ajustes. Desde allí puede crear Supervisores y Técnicos usando solamente usuario y contraseña, activar o desactivar cuentas y cambiar sus contraseñas. Los identificadores internos permanecen ocultos. Estas operaciones se ejecutan en la Edge Function segura [`manage-users`](supabase/functions/manage-users/index.ts); ninguna clave administrativa se entrega al navegador.
 

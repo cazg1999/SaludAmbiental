@@ -495,7 +495,8 @@
                   </label>
                   <label>
                     Contraseña temporal
-                    <input id="newUserPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password" required>
+                    <input id="newUserPassword" type="password" minlength="6" maxlength="16" pattern="(?=.*[A-Za-z])(?=.*[0-9])[A-Za-z0-9]{6,16}" autocomplete="new-password" title="Use de 6 a 16 caracteres, solo letras y números, con al menos una letra y un número." aria-describedby="newUserPasswordHelp" required>
+                    <span id="newUserPasswordHelp" class="form-help">6 a 16 caracteres, solo letras y números, con al menos un número.</span>
                   </label>
                   <label>
                     Rol
@@ -575,7 +576,8 @@
                 <input id="userPasswordTargetId" type="hidden">
                 <label class="stacked">
                   Nueva contraseña
-                  <input id="managedUserNewPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password" required>
+                  <input id="managedUserNewPassword" type="password" minlength="6" maxlength="16" pattern="(?=.*[A-Za-z])(?=.*[0-9])[A-Za-z0-9]{6,16}" autocomplete="new-password" title="Use de 6 a 16 caracteres, solo letras y números, con al menos una letra y un número." aria-describedby="managedUserPasswordHelp" required>
+                  <span id="managedUserPasswordHelp" class="form-help">6 a 16 caracteres, solo letras y números, con al menos un número.</span>
                 </label>
                 <div class="dialog-actions">
                   <button type="button" id="cancelUserPasswordBtn" class="secondary">Cancelar</button>

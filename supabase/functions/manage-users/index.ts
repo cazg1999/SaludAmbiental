@@ -6,6 +6,9 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS"
 };
 
+const managedPasswordPattern = /^(?=.*[A-Za-z])(?=.*[0-9])[A-Za-z0-9]{6,16}$/;
+const managedPasswordError = "La contraseña debe tener de 6 a 16 caracteres, usar solo letras y números e incluir al menos una letra y un número.";
+
 function response(payload: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(payload), {
     status,
@@ -92,11 +95,11 @@ Deno.serve(async (request) => {
       const password = String(body.password || "");
       const role = String(body.role || "");
       if (!/^[a-z0-9._-]{3,32}$/.test(username)) {
-        return response({ ok: false, error: "El usuario debe tener de 3 a 32 letras, números, punto, guion o guion bajo." }, 400);
+        return response({ ok: false, error: "El usuario debe tener de 3 a 32 caracteres, sin espacios. Puede usar letras, números, punto, guion o guion bajo." }, 400);
       }
       if (!displayName) return response({ ok: false, error: "Ingrese el nombre para mostrar." }, 400);
-      if (password.length < 8 || password.length > 128) {
-        return response({ ok: false, error: "La contraseña debe tener al menos 8 caracteres." }, 400);
+      if (!managedPasswordPattern.test(password)) {
+        return response({ ok: false, error: managedPasswordError }, 400);
       }
       if (!['supervisor', 'technician'].includes(role)) {
         return response({ ok: false, error: "Rol inválido." }, 400);
@@ -150,8 +153,8 @@ Deno.serve(async (request) => {
     if (action === "set_password") {
       const target = await editableTarget(admin, body.userId);
       const password = String(body.password || "");
-      if (password.length < 8 || password.length > 128) {
-        return response({ ok: false, error: "La contraseña debe tener al menos 8 caracteres." }, 400);
+      if (!managedPasswordPattern.test(password)) {
+        return response({ ok: false, error: managedPasswordError }, 400);
       }
       const { error } = await admin.auth.admin.updateUserById(target.id, { password });
       if (error) throw error;
