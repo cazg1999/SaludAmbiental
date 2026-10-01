@@ -11,7 +11,7 @@ Resuelve el problema del trabajo dinámico y sin orden fijo (vacunación y abati
 - **Registro por Jornada/Turno:** El técnico registra el trabajo del día seleccionando la fecha, el turno (`☀️ Mañana`, `🌇 Tarde / Noche` o `🕒 Jornada completa`) y la comunidad o barrio visitado.
 - **Distribución Automática:** Las actividades registradas en la bitácora alimentan automáticamente los formatos mensuales correspondientes sin tener que duplicar información:
   - *Abatización, nebulización y criaderos* alimentan **Dengue** y **33 Actividades**.
-  - *Vacunación de caninos y felinos* alimenta **Rab 05** y **33 Actividades**.
+  - *Vacunación de caninos, felinos y otros animales* alimenta el total de animales vacunados en **33 Actividades**; caninos y felinos también alimentan **Rab 05**.
   - *Monitoreo de cloro, análisis de agua y denuncias* alimentan **33 Actividades**.
 - **Historial del Mes:** Línea de tiempo con todas las jornadas realizadas, notas de campo y opción de imprimir el soporte de visitas.
 

@@ -131,11 +131,14 @@ const logFieldMapping = {
   ],
   caninos_vacunados: [
     { reportId: "rabia", fieldSlug: "caninos_vacunados" },
-    { reportId: "actividades", fieldSlug: "vacunacion_canina_y_felina", isCanineFeline: true }
+    { reportId: "actividades", fieldSlug: "vacunacion_canina_y_felina", isVaccinatedAnimalTotal: true }
   ],
   felinos_vacunados: [
     { reportId: "rabia", fieldSlug: "felinos_vacunados" },
-    { reportId: "actividades", fieldSlug: "vacunacion_canina_y_felina", isCanineFeline: true }
+    { reportId: "actividades", fieldSlug: "vacunacion_canina_y_felina", isVaccinatedAnimalTotal: true }
+  ],
+  otros_animales_vacunados: [
+    { reportId: "actividades", fieldSlug: "vacunacion_canina_y_felina", isVaccinatedAnimalTotal: true }
   ],
   viviendas_visitadas_rabia: [
     { reportId: "rabia", fieldSlug: "viviendas_visitadas" }
@@ -169,6 +172,11 @@ const logFieldMapping = {
     { reportId: "actividades", fieldSlug: "juntas_de_agua_supervisadas_o_capacitadas" }
   ]
 };
+
+function totalVaccinatedAnimals(values = {}) {
+  return ["caninos_vacunados", "felinos_vacunados", "otros_animales_vacunados"]
+    .reduce((total, key) => total + Number(values[key] || 0), 0);
+}
 
 const legacyStorageKey = "saludAmbientalMunicipal.v1";
 const userStoragePrefix = "saludAmbientalMunicipal.user.v1";
@@ -1854,9 +1862,9 @@ function syncLogbookToMonthlyReports(facility, year, monthIndex) {
     targets.forEach((target) => {
       const repObj = reportUpdates[target.reportId];
       if (repObj) {
-        if (target.isCanineFeline) {
-          // Suma combinada de caninos y felinos para 33 actividades
-          repObj[target.fieldSlug] = (activitySums["caninos_vacunados"] || 0) + (activitySums["felinos_vacunados"] || 0);
+        if (target.isVaccinatedAnimalTotal) {
+          // Total de animales vacunados para 33 Actividades.
+          repObj[target.fieldSlug] = totalVaccinatedAnimals(activitySums);
         } else {
           repObj[target.fieldSlug] = val;
         }
@@ -1901,6 +1909,7 @@ function renderLogbook() {
     criaderos_eliminados: 0,
     caninos_vacunados: 0,
     felinos_vacunados: 0,
+    otros_animales_vacunados: 0,
     monitoreo_cloro: 0
   };
 
@@ -1928,8 +1937,8 @@ function renderLogbook() {
       <strong>${totals.criaderos_eliminados.toLocaleString("es-HN")}</strong>
     </div>
     <div class="stat-card">
-      <span>Mascotas vacunadas</span>
-      <strong>${(totals.caninos_vacunados + totals.felinos_vacunados).toLocaleString("es-HN")}</strong>
+      <span>Total de animales vacunados</span>
+      <strong>${totalVaccinatedAnimals(totals).toLocaleString("es-HN")}</strong>
     </div>
     <div class="stat-card">
       <span>Monitoreos cloro</span>
@@ -1970,6 +1979,7 @@ function renderLogbook() {
     if (v.deltametrina_litros) activityTags.push(`Deltametrina: <strong>${v.deltametrina_litros}L</strong>`);
     if (v.caninos_vacunados) activityTags.push(`Canes vac: <strong>${v.caninos_vacunados}</strong>`);
     if (v.felinos_vacunados) activityTags.push(`Felinos vac: <strong>${v.felinos_vacunados}</strong>`);
+    if (v.otros_animales_vacunados) activityTags.push(`Otros animales vac: <strong>${v.otros_animales_vacunados}</strong>`);
     if (v.monitoreo_cloro) activityTags.push(`Cloro: <strong>${v.monitoreo_cloro}</strong>`);
 
     const safeId = escapeHtml(log.id);

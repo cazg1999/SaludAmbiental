@@ -131,6 +131,33 @@ test("cross-year logbook consolidation uses the log year", () => {
   assert.match(app, /setEntry\(repId, monthIndex, facility, currentEntry, year, "logbook"\)/);
 });
 
+test("other vaccinated animals feed the vaccinated-animal total", () => {
+  assert.match(html, /id="act_otros_animales_vacunados"/);
+  assert.match(app, /otros_animales_vacunados:\s*\[\s*\{ reportId: "actividades", fieldSlug: "vacunacion_canina_y_felina", isVaccinatedAnimalTotal: true \}/);
+  assert.match(app, /Total de animales vacunados/);
+  const { context } = bootApp();
+  assert.equal(vm.runInContext("totalVaccinatedAnimals({ caninos_vacunados: 2, felinos_vacunados: 3, otros_animales_vacunados: 4 })", context), 9);
+  assert.equal(vm.runInContext("totalVaccinatedAnimals({ caninos_vacunados: 2, felinos_vacunados: 3 })", context), 5);
+  vm.runInContext(`
+    state.entries = {};
+    state.entryMeta = {};
+    state.pendingOperations = [];
+    state.dailyLogs = [{
+      facility: "Cornelio Moncada",
+      year: 2026,
+      month: 0,
+      values: { caninos_vacunados: 2, felinos_vacunados: 3, otros_animales_vacunados: 4 }
+    }];
+    syncLogbookToMonthlyReports("Cornelio Moncada", 2026, 0);
+  `, context);
+  assert.equal(vm.runInContext('getEntry("actividades", 0, "Cornelio Moncada", 2026).vacunacion_canina_y_felina', context), 9);
+  vm.runInContext(`
+    state.dailyLogs[0].values.otros_animales_vacunados = 0;
+    syncLogbookToMonthlyReports("Cornelio Moncada", 2026, 0);
+  `, context);
+  assert.equal(vm.runInContext('getEntry("actividades", 0, "Cornelio Moncada", 2026).vacunacion_canina_y_felina', context), 5);
+});
+
 test("shared catalog is readable by active users and writable only by admin", () => {
   assert.match(schema, /create table if not exists public\.app_catalog/i);
   assert.match(schema, /app_catalog_active_users_read/);
