@@ -1311,6 +1311,29 @@ function expectUpdatedRecord(result, message) {
   return result.data;
 }
 
+function isCatalogConstraintViolation(error) {
+  if (!error) return false;
+  if (error.code === "23503") return true;
+  const message = String(error.message || "").toLowerCase();
+  return message.includes("no se puede retirar")
+    || message.includes("datos históricos")
+    || message.includes("indicador integrado");
+}
+
+function discardInvalidCatalogOperation(operation, error) {
+  if (!operation || operation.entity !== "app_catalog" || !isCatalogConstraintViolation(error)) {
+    return false;
+  }
+  state.pendingOperations = (state.pendingOperations || []).filter((item) => item.id !== operation.id);
+  state.catalogMeta = {
+    ...(state.catalogMeta || {}),
+    local_only: false
+  };
+  saveState();
+  setSupabaseStatus("El catálogo remoto bloqueó ese cambio porque ya hay datos históricos asociados.", false);
+  return true;
+}
+
 async function executePendingOperation(operation) {
   if (operation.entity === "monthly_entry") {
     const payload = operation.payload || {};
@@ -1566,6 +1589,9 @@ async function flushPendingOperations(resolveConflicts = false, context = null) 
       saveState();
     } catch (error) {
       if (error?.code === "STALE_SYNC") throw error;
+      if (discardInvalidCatalogOperation(operation, error)) {
+        return { ok: false, fatal: false, conflicts: [] };
+      }
       console.error("Error de sincronización:", error);
       const message = error?.code === "SYNC_CONFLICT"
         ? "Conflicto de sincronización; se conservó la copia local"

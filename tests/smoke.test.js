@@ -269,6 +269,47 @@ test("legacy local data stays visibly pending until explicit upload succeeds", (
   assert.match(app, /state\.localOnlyMigrationPending = false/);
 });
 
+test("invalid catalog removals are discarded instead of retried forever", async () => {
+  const { context } = bootApp();
+  vm.runInContext(`
+    supabaseClient = {
+      from(table) {
+        return {
+          update(payload) {
+            return {
+              eq() { return this; },
+              select() { return this; },
+              maybeSingle() {
+                return { error: { code: "23503", message: "No se puede retirar un establecimiento con datos históricos" } };
+              }
+            };
+          }
+        };
+      }
+    };
+    currentSession = { user: { id: "user-1" } };
+    currentProfile = { role: "admin" };
+    navigator.onLine = true;
+    state.pendingOperations = [{
+      id: "catalog-op",
+      entity: "app_catalog",
+      entityKey: "main",
+      action: "upsert",
+      payload: { facilities: ["A"], report_fields: { dengue: ["campo1"] }, baseRevision: 1 }
+    }];
+  `, context);
+  const result = await vm.runInContext(`(async () => {
+    return await flushPendingOperations(false, {
+      generation: sessionGeneration,
+      userId: currentSession.user.id,
+      storageKey: activeStorageKey
+    });
+  })()`, context);
+  assert.equal(result.ok, false);
+  assert.equal(vm.runInContext('state.pendingOperations.length', context), 0);
+  assert.equal(vm.runInContext('state.catalogMeta.local_only', context), false);
+});
+
 test("PWA assets referenced by the document exist", () => {
   assert.match(html, /rel="manifest" href="manifest\.webmanifest"/);
   assert.match(html, /@supabase\/supabase-js@\d+\.\d+\.\d+/);
