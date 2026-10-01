@@ -170,18 +170,81 @@ const logFieldMapping = {
   ]
 };
 
-const storageKey = "saludAmbientalMunicipal.v1";
+const legacyStorageKey = "saludAmbientalMunicipal.v1";
+const userStoragePrefix = "saludAmbientalMunicipal.user.v1";
 const supabaseConfigKey = "saludAmbientalMunicipal.supabase.v1";
 const deviceFacilityKey = "saludAmbientalMunicipal.deviceFacility";
-const userRoleKey = "saludAmbientalMunicipal.userRole";
+const cachedProfileKey = "saludAmbientalMunicipal.authProfile.v1";
+const logoutBarrierKey = "saludAmbientalMunicipal.logoutBarrier.v1";
 
+const loginAliases = Object.freeze({
+  admin: "1999cazg@gmail.com",
+  supervisor: "supervisor@saludambiental.local",
+  tecnico: "tecnico@saludambiental.local"
+});
+const managedLoginDomain = "saludambiental.local";
+
+const roleLabels = Object.freeze({
+  admin: "Administrador",
+  supervisor: "Supervisor",
+  technician: "Técnico"
+});
+
+const allowedViewsByRole = Object.freeze({
+  admin: ["logbook", "capture", "facilityReport", "supervisor", "catalogs"],
+  supervisor: ["logbook", "capture", "facilityReport", "supervisor"],
+  technician: ["logbook", "capture", "facilityReport"]
+});
+
+let activeStorageKey = null;
 let state = loadState();
 let supabaseClient = null;
 let supabaseReady = false;
 let syncDebounceTimer = null;
+let syncInProgress = false;
+let queueRevision = 0;
+let sessionGeneration = 0;
+let currentSession = null;
+let currentProfile = null;
+let authSubscription = null;
+let activatingUserId = null;
+let authIntentGeneration = 0;
+let logoutBarrierActive = false;
+let logoutPromise = null;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => document.querySelectorAll(selector);
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>'"]/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "'": "&#39;",
+    '"': "&quot;"
+  })[char]);
+}
+
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
+}
+
+function createUuid() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"));
+  return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10).join("")}`;
+}
+
+function localDateString(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 
 function slug(text) {
   return String(text || "")
@@ -204,26 +267,146 @@ function migrateFacilityName(name) {
   return name;
 }
 
-function loadState() {
-  const saved = localStorage.getItem(storageKey);
+function normalizeMetricValues(values) {
+  const normalized = {};
+  if (!values || typeof values !== "object" || Array.isArray(values)) return normalized;
+  Object.entries(values).forEach(([key, value]) => {
+    const safeKey = slug(key);
+    const number = Number(value);
+    if (safeKey && Number.isFinite(number) && number >= 0) normalized[safeKey] = number;
+  });
+  return normalized;
+}
+
+function cloneDefaultReports() {
+  return Object.fromEntries(
+    Object.entries(defaultReports).map(([reportId, report]) => [
+      reportId,
+      { ...report, fields: [...report.fields] }
+    ])
+  );
+}
+
+function ensureUniqueSlugs(items, label) {
+  const seen = new Set();
+  items.forEach((item) => {
+    const itemSlug = slug(item);
+    if (!itemSlug || seen.has(itemSlug)) {
+      throw new Error(`El catálogo contiene ${label} duplicados o inválidos.`);
+    }
+    seen.add(itemSlug);
+  });
+}
+
+function uniqueCatalogLabels(items, maxLength, maxCount) {
+  const seen = new Set();
+  const result = [];
+  (Array.isArray(items) ? items : []).forEach((item) => {
+    const value = String(item || "").trim().slice(0, maxLength);
+    const valueSlug = slug(value);
+    if (!valueSlug || seen.has(valueSlug) || result.length >= maxCount) return;
+    seen.add(valueSlug);
+    result.push(value);
+  });
+  return result;
+}
+
+function normalizeImportedState(parsed) {
+  if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.facilities) || !parsed.reports) {
+    throw new Error("El archivo no tiene el formato de respaldo esperado.");
+  }
+  const facilities = [...new Set(parsed.facilities
+    .map((facility) => String(facility || "").trim().slice(0, 120))
+    .filter(Boolean))].slice(0, 100);
+  if (!facilities.length) throw new Error("El respaldo no contiene establecimientos válidos.");
+  ensureUniqueSlugs(facilities, "establecimientos");
+
+  const reports = {};
+  Object.entries(defaultReports).forEach(([reportId, defaults]) => {
+    const importedFields = parsed.reports?.[reportId]?.fields;
+    reports[reportId] = {
+      ...defaults,
+      fields: (Array.isArray(importedFields) ? importedFields : defaults.fields)
+        .map((field) => String(field || "").trim().slice(0, 160))
+        .filter(Boolean)
+        .slice(0, 250)
+    };
+    ensureUniqueSlugs(reports[reportId].fields, `indicadores de ${reportId}`);
+  });
+
+  const entries = {};
+  Object.entries(parsed.entries || {}).slice(0, 20000).forEach(([key, values]) => {
+    const [reportId, year, monthIndex, facilitySlug] = String(key).split("|");
+    if (!reports[reportId] || !/^\d{4}$/.test(year) || !/^\d{1,2}$/.test(monthIndex) || !facilitySlug) return;
+    entries[[reportId, year, monthIndex, slug(facilitySlug)].join("|")] = normalizeMetricValues(values);
+  });
+
+  const dailyLogs = (Array.isArray(parsed.dailyLogs) ? parsed.dailyLogs : []).slice(0, 20000).map((log) => {
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(String(log.date || "")) ? String(log.date) : localDateString();
+    const dateObject = new Date(`${date}T12:00:00`);
+    return {
+      id: isUuid(log.id) ? log.id : createUuid(),
+      facility: String(log.facility || facilities[0]).slice(0, 120),
+      date,
+      year: dateObject.getFullYear(),
+      month: dateObject.getMonth(),
+      shift: ["manana", "tarde", "noche", "completa"].includes(log.shift) ? log.shift : "manana",
+      community: String(log.community || "").slice(0, 200),
+      notes: String(log.notes || "").slice(0, 2000),
+      values: normalizeMetricValues(log.values),
+      created_at: log.created_at || new Date().toISOString(),
+      updated_at: log.updated_at || log.created_at || new Date().toISOString(),
+      server_updated_at: log.server_updated_at || null
+    };
+  });
+
+  return {
+    schemaVersion: 2,
+    year: Math.max(2020, Math.min(2035, Number(parsed.year) || currentYearDefault())),
+    facilities,
+    reports,
+    entries,
+    entryMeta: {},
+    catalogMeta: { revision: null, updated_at: null, local_only: true },
+    dailyLogs,
+    pendingOperations: [],
+    localOnlyMigrationPending: true
+  };
+}
+
+function loadState(key = null) {
+  const saved = key ? localStorage.getItem(key) : null;
   if (saved) {
     try {
       const parsed = JSON.parse(saved);
-      const reports = parsed.reports || defaultReports;
+      const reports = cloneDefaultReports();
       Object.keys(defaultReports).forEach((reportId) => {
+        const storedReport = parsed.reports?.[reportId];
+        const fields = uniqueCatalogLabels(
+          Array.isArray(storedReport?.fields) ? storedReport.fields : defaultReports[reportId].fields,
+          160,
+          250
+        );
         reports[reportId] = {
           ...defaultReports[reportId],
-          ...(reports[reportId] || {}),
+          ...(storedReport && typeof storedReport === "object" ? storedReport : {}),
           name: defaultReports[reportId].name,
           shortName: defaultReports[reportId].shortName,
-          description: defaultReports[reportId].description
+          description: defaultReports[reportId].description,
+          fields: fields.length ? fields : [...defaultReports[reportId].fields]
         };
       });
 
       // Migrar Pto. Cortés -> Cornelio Moncada en establecimientos
-      let facilities = (parsed.facilities?.length ? parsed.facilities : defaultFacilities).map(migrateFacilityName);
-      if (!facilities.includes("Cornelio Moncada")) {
+      let facilities = uniqueCatalogLabels(
+        (parsed.facilities?.length ? parsed.facilities : defaultFacilities)
+          .map((facility) => migrateFacilityName(String(facility || ""))),
+        120,
+        100
+      );
+      if (!facilities.some((facility) => slug(facility) === "cornelio_moncada")) {
         facilities.unshift("Cornelio Moncada");
+        facilities = facilities.slice(0, 100);
       }
 
       // Migrar claves de datos históricas de pto_cortes -> cornelio_moncada
@@ -233,21 +416,56 @@ function loadState() {
         if (parts[3] === "pto_cortes" || parts[3] === "puerto_cortes") {
           parts[3] = "cornelio_moncada";
         }
-        entries[parts.join("|")] = v;
+        entries[parts.join("|")] = normalizeMetricValues(v);
       });
 
       // Migrar bitácora si existía
-      const dailyLogs = (parsed.dailyLogs || []).map((log) => ({
-        ...log,
-        facility: migrateFacilityName(log.facility)
-      }));
+      const pendingOperations = Array.isArray(parsed.pendingOperations)
+        ? parsed.pendingOperations.filter((operation) => operation && typeof operation === "object")
+        : [];
+      const dailyLogs = (Array.isArray(parsed.dailyLogs) ? parsed.dailyLogs : []).map((log) => {
+        const id = isUuid(log.id) ? log.id : createUuid();
+        const rawFacility = migrateFacilityName(String(log.facility || facilities[0] || "Cornelio Moncada"));
+        const normalized = {
+          id,
+          facility: facilities.find((facility) => slug(facility) === slug(rawFacility)) || facilities[0],
+          date: String(log.date || localDateString()),
+          year: Number(log.year) || currentYearDefault(),
+          month: Math.max(0, Math.min(11, Number(log.month) || 0)),
+          shift: ["manana", "tarde", "noche", "completa"].includes(log.shift) ? log.shift : "manana",
+          community: String(log.community || "").slice(0, 200),
+          notes: String(log.notes || "").slice(0, 2000),
+          values: normalizeMetricValues(log.values),
+          created_at: log.created_at || new Date().toISOString(),
+          updated_at: log.updated_at || log.created_at || new Date().toISOString(),
+          server_updated_at: log.server_updated_at || null
+        };
+        if (id !== log.id) {
+          pendingOperations.push({
+            id: createUuid(),
+            entity: "daily_log",
+            entityKey: id,
+            action: "upsert",
+            payload: normalized,
+            queued_at: new Date().toISOString()
+          });
+        }
+        return normalized;
+      });
 
       return {
+        schemaVersion: 2,
         year: parsed.year || currentYearDefault(),
         facilities,
         reports,
         entries,
-        dailyLogs
+        entryMeta: parsed.entryMeta && typeof parsed.entryMeta === "object" ? parsed.entryMeta : {},
+        catalogMeta: parsed.catalogMeta && typeof parsed.catalogMeta === "object"
+          ? parsed.catalogMeta
+          : { revision: null, updated_at: null, local_only: false },
+        dailyLogs,
+        pendingOperations,
+        localOnlyMigrationPending: Boolean(parsed.localOnlyMigrationPending)
       };
     } catch (error) {
       console.warn("No se pudo leer el respaldo local", error);
@@ -255,21 +473,68 @@ function loadState() {
   }
 
   return {
+    schemaVersion: 2,
     year: currentYearDefault(),
-    facilities: defaultFacilities,
-    reports: defaultReports,
+    facilities: [...defaultFacilities],
+    reports: cloneDefaultReports(),
     entries: {},
-    dailyLogs: []
+    entryMeta: {},
+    catalogMeta: { revision: null, updated_at: null, local_only: false },
+    dailyLogs: [],
+    pendingOperations: [],
+    localOnlyMigrationPending: false
   };
 }
 
+function userStateKey(userId) {
+  return `${userStoragePrefix}.${userId}`;
+}
+
+function activateUserState(userId, role) {
+  sessionGeneration += 1;
+  const nextStorageKey = userStateKey(userId);
+  const hasUserState = localStorage.getItem(nextStorageKey) !== null;
+  activeStorageKey = nextStorageKey;
+
+  if (hasUserState) {
+    state = loadState(nextStorageKey);
+  } else if (role === "admin" && localStorage.getItem(legacyStorageKey) !== null) {
+    // Keep data from older installations, but not its unauthenticated queue.
+    state = loadState(legacyStorageKey);
+    state.pendingOperations = [];
+    state.catalogMeta = { revision: null, updated_at: null, local_only: true };
+    state.localOnlyMigrationPending = true;
+    saveState();
+  } else {
+    state = loadState();
+    saveState();
+  }
+  queueRevision = 0;
+}
+
+function clearActiveUserState() {
+  if (syncDebounceTimer) clearTimeout(syncDebounceTimer);
+  syncDebounceTimer = null;
+  activeStorageKey = null;
+  state = loadState();
+  queueRevision += 1;
+  sessionGeneration += 1;
+}
+
 function saveState() {
+  if (!activeStorageKey) return;
   try {
-    localStorage.setItem(storageKey, JSON.stringify(state));
+    localStorage.setItem(activeStorageKey, JSON.stringify(state));
     const savedState = $("#savedState");
     if (savedState) {
-      savedState.textContent = "Guardado";
-      savedState.className = "status-pill saved";
+      const pendingCount = state.pendingOperations?.length || 0;
+      const localUploadPending = Boolean(state.localOnlyMigrationPending);
+      savedState.textContent = localUploadPending
+        ? "Datos locales pendientes de subir"
+        : pendingCount
+          ? `Pendiente de sincronizar (${pendingCount})`
+          : "Guardado";
+      savedState.className = pendingCount || localUploadPending ? "status-pill saving" : "status-pill saved";
     }
   } catch (err) {
     console.error("Error al guardar estado local:", err);
@@ -301,6 +566,7 @@ function setSupabaseStatus(message, isConnected = false) {
   const statusEl = $("#supabaseStatus");
   const syncDot = $("#syncDot");
   const syncStatusText = $("#syncStatusText");
+  const syncBadge = $("#syncStatusBadge");
 
   if (statusEl) {
     statusEl.textContent = message;
@@ -311,6 +577,12 @@ function setSupabaseStatus(message, isConnected = false) {
     if (isConnected) {
       syncDot.className = "status-indicator connected";
       syncStatusText.textContent = "En línea";
+    } else if (/conflicto/i.test(message)) {
+      syncDot.className = "status-indicator";
+      syncStatusText.textContent = "Conflicto";
+    } else if (/pendiente/i.test(message)) {
+      syncDot.className = "status-indicator";
+      syncStatusText.textContent = "Pendiente";
     } else if (navigator.onLine) {
       syncDot.className = "status-indicator";
       syncStatusText.textContent = "Local";
@@ -319,6 +591,7 @@ function setSupabaseStatus(message, isConnected = false) {
       syncStatusText.textContent = "Sin red";
     }
   }
+  if (syncBadge) syncBadge.title = message;
 }
 
 function setupSupabase() {
@@ -330,7 +603,7 @@ function setupSupabase() {
 
   if (!config.url || !config.anonKey) {
     supabaseReady = false;
-    setSupabaseStatus("Sin conectar (modo local offline)", false);
+    setSupabaseStatus("Supabase no configurado", false);
     return false;
   }
 
@@ -341,15 +614,367 @@ function setupSupabase() {
   }
 
   try {
-    supabaseClient = window.supabase.createClient(config.url, config.anonKey);
+    authSubscription?.unsubscribe?.();
+    supabaseClient = window.supabase.createClient(config.url, config.anonKey, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: false
+      }
+    });
     supabaseReady = true;
-    setSupabaseStatus("Conectado a Supabase", true);
+    setSupabaseStatus("Configurado · Inicie sesión", false);
     return true;
   } catch (err) {
     supabaseReady = false;
     setSupabaseStatus(`Error: ${err.message}`, false);
     return false;
   }
+}
+
+function normalizeUsername(value) {
+  return String(value || "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase();
+}
+
+function expectedRoleForEmail(email) {
+  const normalized = String(email || "").toLowerCase();
+  if (normalized === loginAliases.admin) return "admin";
+  if (normalized === loginAliases.supervisor) return "supervisor";
+  if (normalized === loginAliases.tecnico) return "technician";
+  return null;
+}
+
+function loginEmailForUsername(username) {
+  if (loginAliases[username]) return loginAliases[username];
+  return /^[a-z0-9._-]{3,32}$/.test(username)
+    ? `${username}@${managedLoginDomain}`
+    : null;
+}
+
+function isManagedSessionProfile(user, profile) {
+  const metadata = user?.app_metadata || {};
+  return metadata.salud_ambiental_managed === true
+    && metadata.salud_ambiental_username === normalizeUsername(profile?.username)
+    && metadata.salud_ambiental_role === profile?.role
+    && ["supervisor", "technician"].includes(profile?.role);
+}
+
+function setLoginError(message = "") {
+  const errorEl = $("#loginError");
+  if (!errorEl) return;
+  errorEl.textContent = message;
+  errorEl.style.display = message ? "block" : "none";
+}
+
+function setLoginBusy(isBusy) {
+  const button = $("#loginSubmitBtn");
+  if (!button) return;
+  button.disabled = Boolean(isBusy) || !supabaseReady;
+  button.textContent = isBusy ? "Verificando..." : "Iniciar Sesión";
+}
+
+function hasLogoutBarrier() {
+  try {
+    return logoutBarrierActive || localStorage.getItem(logoutBarrierKey) === "1";
+  } catch (error) {
+    return logoutBarrierActive;
+  }
+}
+
+function setLogoutBarrier(active) {
+  logoutBarrierActive = Boolean(active);
+  try {
+    if (logoutBarrierActive) {
+      localStorage.setItem(logoutBarrierKey, "1");
+    } else {
+      localStorage.removeItem(logoutBarrierKey);
+    }
+  } catch (error) {
+    console.warn("No se pudo persistir la barrera de cierre de sesión:", error);
+  }
+}
+
+function showLoginScreen(message = null) {
+  authIntentGeneration += 1;
+  currentSession = null;
+  currentProfile = null;
+  clearActiveUserState();
+  $("#appContainer")?.style.setProperty("display", "none");
+  $("#loginScreen")?.style.setProperty("display", "flex");
+  $$("dialog[open]").forEach((dialog) => dialog.close());
+  if (message !== null) setLoginError(message);
+  setLoginBusy(false);
+  const usernameInput = $("#loginUsername");
+  if (usernameInput) {
+    usernameInput.value = "";
+    usernameInput.focus();
+  }
+  const passwordInput = $("#loginPassword");
+  if (passwordInput) passwordInput.value = "";
+}
+
+function allowedViews() {
+  return currentProfile ? (allowedViewsByRole[currentProfile.role] || []) : [];
+}
+
+function canAccessView(viewName) {
+  return Boolean(currentProfile && allowedViews().includes(viewName));
+}
+
+function initialViewForRole(role) {
+  return role === "technician" ? "logbook" : "supervisor";
+}
+
+function applyRoleAccess() {
+  const views = allowedViews();
+  $$("[data-view]").forEach((element) => {
+    const allowed = views.includes(element.dataset.view);
+    element.hidden = !allowed;
+    element.setAttribute("aria-hidden", String(!allowed));
+  });
+
+  const displayName = currentProfile?.display_name || currentProfile?.username || "Usuario";
+  const roleLabel = roleLabels[currentProfile?.role] || "Sin rol";
+  if ($("#headerUserText")) $("#headerUserText").textContent = displayName;
+  if ($("#sidebarUserName")) $("#sidebarUserName").textContent = displayName;
+  if ($("#sidebarUserRole")) $("#sidebarUserRole").textContent = roleLabel;
+}
+
+function loadCachedProfile(userId) {
+  try {
+    const cached = JSON.parse(localStorage.getItem(cachedProfileKey) || "null");
+    return cached?.id === userId ? cached : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+async function fetchAuthenticatedProfile(user) {
+  const { data, error, status } = await supabaseClient
+    .from("profiles")
+    .select("id, username, display_name, role, facility_slug, active")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  if (error) {
+    const cached = loadCachedProfile(user.id);
+    const networkFailure = !navigator.onLine || status === 0 || /fetch|network/i.test(error.message || "");
+    if (cached && networkFailure) return cached;
+    throw error;
+  }
+  if (!data) throw new Error("La cuenta no tiene un perfil autorizado.");
+  return data;
+}
+
+async function activateSession(session) {
+  if (hasLogoutBarrier()) {
+    showLoginScreen();
+    return;
+  }
+  if (!session?.user || !supabaseClient) {
+    showLoginScreen();
+    return;
+  }
+  if (activatingUserId === session.user.id) return;
+  if (currentSession?.user?.id === session.user.id && currentProfile?.id === session.user.id) {
+    currentSession = session;
+    return;
+  }
+
+  const activationIntent = ++authIntentGeneration;
+  activatingUserId = session.user.id;
+  try {
+    const profile = await fetchAuthenticatedProfile(session.user);
+    if (activationIntent !== authIntentGeneration || hasLogoutBarrier()) return;
+    const expectedRole = expectedRoleForEmail(session.user.email);
+    const validFixedAccount = Boolean(expectedRole && profile.role === expectedRole);
+    const validManagedAccount = isManagedSessionProfile(session.user, profile);
+    if (!profile.active || (!validFixedAccount && !validManagedAccount) || !allowedViewsByRole[profile.role]) {
+      throw new Error("La cuenta no tiene permisos válidos.");
+    }
+
+    activateUserState(session.user.id, profile.role);
+    currentSession = session;
+    currentProfile = profile;
+    localStorage.setItem(cachedProfileKey, JSON.stringify(profile));
+    setLoginError("");
+    $("#loginScreen")?.style.setProperty("display", "none");
+    $("#appContainer")?.style.setProperty("display", "block");
+    applyRoleAccess();
+    refreshSelectors();
+    switchView(initialViewForRole(profile.role));
+    await synchronizeWithSupabase();
+  } catch (error) {
+    if (activationIntent !== authIntentGeneration) return;
+    console.error("No se pudo activar la sesión:", error);
+    setLogoutBarrier(true);
+    localStorage.removeItem(cachedProfileKey);
+    await supabaseClient.auth.signOut({ scope: "local" }).catch(() => {});
+    showLoginScreen("Cuenta sin autorización. Contacte al administrador.");
+  } finally {
+    if (activatingUserId === session.user.id) activatingUserId = null;
+  }
+}
+
+async function handleLogin(event) {
+  event.preventDefault();
+  setLoginError("");
+  if (!supabaseReady || !supabaseClient) {
+    setLoginError("Sistema no configurado. Contacte al administrador.");
+    return;
+  }
+
+  const username = normalizeUsername($("#loginUsername")?.value);
+  const passwordInput = $("#loginPassword");
+  const email = loginEmailForUsername(username);
+  if (!email || !passwordInput?.value) {
+    setLoginError("Usuario o contraseña incorrectos.");
+    return;
+  }
+
+  setLoginBusy(true);
+  try {
+    if (logoutPromise) await logoutPromise.catch(() => {});
+    const { data, error } = await supabaseClient.auth.signInWithPassword({
+      email,
+      password: passwordInput.value
+    });
+    passwordInput.value = "";
+    if (error || !data.session) throw error || new Error("No se creó la sesión.");
+    // Solo un inicio de sesión explícito y exitoso levanta la barrera persistente.
+    setLogoutBarrier(false);
+    await activateSession(data.session);
+  } catch (error) {
+    console.warn("Inicio de sesión rechazado:", error?.message || error);
+    passwordInput.value = "";
+    setLoginError("Usuario o contraseña incorrectos.");
+  } finally {
+    setLoginBusy(false);
+  }
+}
+
+async function handleLogout() {
+  const client = supabaseClient;
+  // Se establece antes de tocar la sesión remota: si signOut falla o se recarga,
+  // INITIAL_SESSION no puede volver a abrir la aplicación.
+  setLogoutBarrier(true);
+  localStorage.removeItem(cachedProfileKey);
+  showLoginScreen("");
+  if (client) {
+    logoutPromise = client.auth.signOut({ scope: "local" });
+    try {
+      const { error } = await logoutPromise;
+      if (error) console.warn("No se pudo cerrar la sesión remota:", error);
+    } finally {
+      logoutPromise = null;
+    }
+  }
+}
+
+function watchAuthState() {
+  const { data } = supabaseClient.auth.onAuthStateChange((event, session) => {
+    setTimeout(() => {
+      if (hasLogoutBarrier()) {
+        showLoginScreen();
+        if (session && !logoutPromise) {
+          logoutPromise = supabaseClient.auth.signOut({ scope: "local" })
+            .catch((error) => console.warn("No se pudo limpiar la sesión cerrada:", error))
+            .finally(() => { logoutPromise = null; });
+        }
+        return;
+      }
+      if (!session || event === "SIGNED_OUT") {
+        showLoginScreen();
+        return;
+      }
+      if (event === "INITIAL_SESSION" || event === "SIGNED_IN" || event === "USER_UPDATED") {
+        void activateSession(session);
+        return;
+      }
+      currentSession = session;
+    }, 0);
+  });
+  authSubscription = data.subscription;
+}
+
+function catalogSnapshot() {
+  const snapshot = {
+    facilities: [...state.facilities],
+    report_fields: Object.fromEntries(
+      Object.keys(defaultReports).map((reportId) => [
+        reportId,
+        [...(state.reports[reportId]?.fields || defaultReports[reportId].fields)]
+      ])
+    )
+  };
+  ensureUniqueSlugs(snapshot.facilities, "establecimientos");
+  Object.entries(snapshot.report_fields).forEach(([reportId, fields]) => {
+    ensureUniqueSlugs(fields, `indicadores de ${reportId}`);
+  });
+  return snapshot;
+}
+
+function normalizeRemoteCatalog(record) {
+  if (!record || !Array.isArray(record.facilities) || !record.report_fields) {
+    throw new Error("El catálogo remoto no tiene un formato válido.");
+  }
+  const facilities = [...new Set(record.facilities
+    .map((facility) => String(facility || "").trim().slice(0, 120))
+    .filter(Boolean))].slice(0, 100);
+  if (!facilities.length) throw new Error("El catálogo remoto no contiene establecimientos.");
+  ensureUniqueSlugs(facilities, "establecimientos");
+
+  const reports = cloneDefaultReports();
+  Object.keys(defaultReports).forEach((reportId) => {
+    const fields = record.report_fields[reportId];
+    if (!Array.isArray(fields)) throw new Error(`El catálogo remoto de ${reportId} no es válido.`);
+    reports[reportId].fields = [...new Set(fields
+      .map((field) => String(field || "").trim().slice(0, 160))
+      .filter(Boolean))].slice(0, 250);
+    if (!reports[reportId].fields.length) {
+      throw new Error(`El catálogo remoto de ${reportId} está vacío.`);
+    }
+    ensureUniqueSlugs(reports[reportId].fields, `indicadores de ${reportId}`);
+  });
+  return { facilities, reports };
+}
+
+function applyRemoteCatalog(record) {
+  if (!record) return;
+  const hasPendingCatalog = (state.pendingOperations || []).some(
+    (operation) => operation.entity === "app_catalog"
+  );
+  if (hasPendingCatalog || (currentProfile?.role === "admin" && state.catalogMeta?.local_only)) return;
+  const catalog = normalizeRemoteCatalog(record);
+  state.facilities = catalog.facilities;
+  state.reports = catalog.reports;
+  state.catalogMeta = {
+    revision: Number(record.revision),
+    updated_at: record.updated_at || null,
+    local_only: false
+  };
+}
+
+function queueCatalogUpsert() {
+  if (currentProfile?.role !== "admin") return;
+  const snapshot = catalogSnapshot();
+  state.catalogMeta = {
+    ...(state.catalogMeta || {}),
+    local_only: true
+  };
+  queueOperation({
+    entity: "app_catalog",
+    entityKey: "main",
+    action: "upsert",
+    payload: {
+      ...snapshot,
+      baseRevision: state.catalogMeta?.revision ?? null
+    }
+  });
 }
 
 function entryRecord(reportId, year, monthIndex, facility, values) {
@@ -359,29 +984,66 @@ function entryRecord(reportId, year, monthIndex, facility, values) {
     month: monthIndex + 1,
     facility_slug: slug(facility),
     facility_name: facility,
-    values,
-    updated_at: new Date().toISOString()
+    values: normalizeMetricValues(values),
+    deleted_at: null
   };
 }
 
 function applyRemoteRecords(records) {
   if (!Array.isArray(records)) return;
+  const pendingKeys = new Set(
+    (state.pendingOperations || [])
+      .filter((operation) => operation.entity === "monthly_entry")
+      .map((operation) => operation.entityKey)
+  );
   records.forEach((record) => {
     const monthIndex = Number(record.month) - 1;
     const facName = migrateFacilityName(record.facility_name);
     const key = entryKey(record.report_id, record.year, monthIndex, facName);
-    state.entries[key] = record.values || {};
+    if (pendingKeys.has(key)) return;
+    const hasLocalEntry = Object.prototype.hasOwnProperty.call(state.entries, key);
+    const meta = state.entryMeta?.[key] || {};
+    // A local-only value must be uploaded explicitly; a pull cannot erase it.
+    if (hasLocalEntry && !meta.server_updated_at) return;
+    const remoteTimestamp = Date.parse(record.updated_at || 0);
+    const knownServerTimestamp = Date.parse(meta.server_updated_at || 0);
+    if (!knownServerTimestamp || remoteTimestamp >= knownServerTimestamp) {
+      if (record.deleted_at) {
+        delete state.entries[key];
+      } else {
+        state.entries[key] = normalizeMetricValues(record.values);
+      }
+      state.entryMeta ||= {};
+      state.entryMeta[key] = {
+        ...meta,
+        updated_at: record.updated_at || new Date().toISOString(),
+        server_updated_at: record.updated_at || null,
+        deleted_at: record.deleted_at || null
+      };
+    }
   });
-  saveState();
 }
 
 function applyRemoteDailyLogs(logs) {
   if (!Array.isArray(logs)) return;
   const mergedMap = new Map();
-  // Locales existentes
   (state.dailyLogs || []).forEach((item) => mergedMap.set(item.id, item));
-  // Remotos de Supabase
+  const pendingIds = new Set(
+    (state.pendingOperations || [])
+      .filter((operation) => operation.entity === "daily_log")
+      .map((operation) => operation.entityKey)
+  );
   logs.forEach((log) => {
+    if (!isUuid(log.id) || pendingIds.has(log.id)) return;
+    const current = mergedMap.get(log.id);
+    if (current && !current.server_updated_at) return;
+    const remoteTimestamp = Date.parse(log.updated_at || log.created_at || 0);
+    const knownServerTimestamp = Date.parse(current?.server_updated_at || 0);
+    if (current && knownServerTimestamp > remoteTimestamp) return;
+    if (log.deleted_at) {
+      mergedMap.delete(log.id);
+      return;
+    }
     mergedMap.set(log.id, {
       id: log.id,
       facility: migrateFacilityName(log.facility_name),
@@ -389,176 +1051,762 @@ function applyRemoteDailyLogs(logs) {
       year: log.year,
       month: log.month - 1,
       shift: log.shift,
-      community: log.community || "",
-      notes: log.notes || "",
-      values: log.values || {},
-      created_at: log.created_at
+      community: String(log.community || "").slice(0, 200),
+      notes: String(log.notes || "").slice(0, 2000),
+      values: normalizeMetricValues(log.values),
+      created_at: log.created_at,
+      updated_at: log.updated_at || log.created_at,
+      server_updated_at: log.updated_at || null
     });
   });
   state.dailyLogs = Array.from(mergedMap.values());
-  saveState();
 }
 
-async function syncFromSupabase() {
-  if (!supabaseReady || !supabaseClient) return;
+function dailyLogRecord(log) {
+  return {
+    id: log.id,
+    facility_slug: slug(log.facility),
+    facility_name: String(log.facility || "").slice(0, 120),
+    date: log.date,
+    year: Number(log.year),
+    month: Number(log.month) + 1,
+    shift: log.shift,
+    community: String(log.community || "").slice(0, 200),
+    notes: String(log.notes || "").slice(0, 2000),
+    values: normalizeMetricValues(log.values),
+    deleted_at: null
+  };
+}
 
+function scheduleSynchronization(delay = 500) {
+  if (syncDebounceTimer) clearTimeout(syncDebounceTimer);
+  syncDebounceTimer = setTimeout(() => {
+    syncDebounceTimer = null;
+    void synchronizeWithSupabase();
+  }, delay);
+}
+
+function queueOperation(operation) {
+  state.pendingOperations ||= [];
+  const index = state.pendingOperations.findIndex(
+    (item) => item.entity === operation.entity && item.entityKey === operation.entityKey
+  );
+  const previous = index >= 0 ? state.pendingOperations[index] : null;
+  const payload = operation.payload ? { ...operation.payload } : null;
+  if (payload && previous?.payload) {
+    ["baseUpdatedAt", "baseRevision"].forEach((field) => {
+      if (Object.prototype.hasOwnProperty.call(previous.payload, field)) {
+        payload[field] = previous.payload[field];
+      }
+    });
+    if (
+      Object.prototype.hasOwnProperty.call(payload, "source")
+      || Object.prototype.hasOwnProperty.call(previous.payload, "source")
+    ) {
+      const previousSource = previous.payload.source || "manual";
+      const nextSource = payload.source || "manual";
+      payload.source = previousSource === nextSource
+        ? nextSource
+        : "mixed";
+    }
+    if (operation.entity === "daily_log") {
+      const buckets = [
+        ...(Array.isArray(previous.payload.affectedBuckets) ? previous.payload.affectedBuckets : []),
+        ...(Array.isArray(payload.affectedBuckets) ? payload.affectedBuckets : [])
+      ];
+      payload.affectedBuckets = buckets.filter((bucket, bucketIndex) => (
+        buckets.findIndex((candidate) => (
+          Number(candidate.year) === Number(bucket.year)
+          && Number(candidate.monthIndex) === Number(bucket.monthIndex)
+          && slug(candidate.facility) === slug(bucket.facility)
+        )) === bucketIndex
+      ));
+    }
+  }
+  const normalized = {
+    // A replacement receives a new id so an in-flight older request cannot remove it.
+    id: createUuid(),
+    entity: operation.entity,
+    entityKey: operation.entityKey,
+    action: operation.action,
+    payload,
+    queued_at: new Date().toISOString()
+  };
+  if (index >= 0) {
+    state.pendingOperations[index] = normalized;
+  } else {
+    state.pendingOperations.push(normalized);
+  }
+  queueRevision += 1;
+  saveState();
+  scheduleSynchronization();
+}
+
+function queueMonthlyUpsert(reportId, year, monthIndex, facility, values, source = "manual") {
+  const key = entryKey(reportId, year, monthIndex, facility);
+  const baseUpdatedAt = state.entryMeta?.[key]?.server_updated_at || null;
+  queueOperation({
+    entity: "monthly_entry",
+    entityKey: key,
+    action: "upsert",
+    payload: {
+      reportId,
+      year,
+      monthIndex,
+      facility,
+      values: normalizeMetricValues(values),
+      baseUpdatedAt,
+      source
+    }
+  });
+}
+
+function affectedLogBuckets(...logs) {
+  const buckets = logs.filter(Boolean).map((log) => ({
+    year: Number(log.year),
+    monthIndex: Number(log.month),
+    facility: log.facility
+  }));
+  return buckets.filter((bucket, bucketIndex) => (
+    buckets.findIndex((candidate) => (
+      candidate.year === bucket.year
+      && candidate.monthIndex === bucket.monthIndex
+      && slug(candidate.facility) === slug(bucket.facility)
+    )) === bucketIndex
+  ));
+}
+
+function upsertDailyLogRemote(log, previousLog = null) {
+  queueOperation({
+    entity: "daily_log",
+    entityKey: log.id,
+    action: "upsert",
+    payload: {
+      ...log,
+      baseUpdatedAt: log.server_updated_at || null,
+      affectedBuckets: affectedLogBuckets(log, previousLog)
+    }
+  });
+}
+
+function deleteDailyLogRemote(log) {
+  if (!log) return;
+  queueOperation({
+    entity: "daily_log",
+    entityKey: log.id,
+    action: "delete",
+    payload: {
+      baseUpdatedAt: log.server_updated_at || null,
+      deletedAt: new Date().toISOString(),
+      year: Number(log.year),
+      monthIndex: Number(log.month),
+      facility: log.facility,
+      affectedBuckets: affectedLogBuckets(log)
+    }
+  });
+}
+
+function deleteEntryRemote(reportId, monthIndex, facility, year = state.year) {
+  const key = entryKey(reportId, year, monthIndex, facility);
+  queueOperation({
+    entity: "monthly_entry",
+    entityKey: key,
+    action: "delete",
+    payload: {
+      reportId,
+      year,
+      monthIndex,
+      facility,
+      baseUpdatedAt: state.entryMeta?.[key]?.server_updated_at || null,
+      deletedAt: new Date().toISOString()
+    }
+  });
+}
+
+function expectSupabaseResult(result) {
+  if (result?.error) throw result.error;
+  return result?.data;
+}
+
+function createSyncConflict(message) {
+  const error = new Error(message);
+  error.code = "SYNC_CONFLICT";
+  return error;
+}
+
+function createStaleSyncError() {
+  const error = new Error("La sesión cambió durante la sincronización.");
+  error.code = "STALE_SYNC";
+  return error;
+}
+
+function isCurrentSyncContext(context) {
+  return Boolean(
+    context
+    && sessionGeneration === context.generation
+    && currentSession?.user?.id === context.userId
+    && activeStorageKey === context.storageKey
+  );
+}
+
+function assertCurrentSyncContext(context) {
+  if (!isCurrentSyncContext(context)) throw createStaleSyncError();
+}
+
+function expectUpdatedRecord(result, message) {
+  if (result?.error) {
+    if (result.error.code === "23505") throw createSyncConflict(message);
+    throw result.error;
+  }
+  if (!result?.data) throw createSyncConflict(message);
+  return result.data;
+}
+
+async function executePendingOperation(operation) {
+  if (operation.entity === "monthly_entry") {
+    const payload = operation.payload || {};
+    const baseUpdatedAt = payload.baseUpdatedAt || null;
+    const baseQuery = () => supabaseClient
+      .from("monthly_entries")
+      .select("updated_at, deleted_at")
+      .eq("report_id", payload.reportId)
+      .eq("year", payload.year)
+      .eq("month", Number(payload.monthIndex) + 1)
+      .eq("facility_slug", slug(payload.facility));
+
+    if (operation.action === "delete") {
+      if (!baseUpdatedAt) {
+        const existing = expectSupabaseResult(await baseQuery().maybeSingle());
+        if (!existing) return { serverUpdatedAt: null };
+        throw createSyncConflict("El registro mensual cambió en otro dispositivo.");
+      }
+      const row = expectUpdatedRecord(await supabaseClient
+        .from("monthly_entries")
+        .update({ deleted_at: payload.deletedAt || new Date().toISOString() })
+        .eq("report_id", payload.reportId)
+        .eq("year", payload.year)
+        .eq("month", Number(payload.monthIndex) + 1)
+        .eq("facility_slug", slug(payload.facility))
+        .eq("updated_at", baseUpdatedAt)
+        .select("updated_at")
+        .maybeSingle(), "El registro mensual cambió en otro dispositivo.");
+      return { serverUpdatedAt: row.updated_at };
+    }
+
+    const record = entryRecord(payload.reportId, payload.year, payload.monthIndex, payload.facility, payload.values);
+    if (!baseUpdatedAt) {
+      const row = expectUpdatedRecord(await supabaseClient
+        .from("monthly_entries")
+        .insert(record)
+        .select("updated_at")
+        .single(), "Ya existe una versión remota de este registro mensual.");
+      return { serverUpdatedAt: row.updated_at };
+    }
+    const row = expectUpdatedRecord(await supabaseClient
+      .from("monthly_entries")
+      .update(record)
+      .eq("report_id", payload.reportId)
+      .eq("year", payload.year)
+      .eq("month", Number(payload.monthIndex) + 1)
+      .eq("facility_slug", slug(payload.facility))
+      .eq("updated_at", baseUpdatedAt)
+      .select("updated_at")
+      .maybeSingle(), "El registro mensual cambió en otro dispositivo.");
+    return { serverUpdatedAt: row.updated_at };
+  }
+
+  if (operation.entity === "daily_log") {
+    const payload = operation.payload || {};
+    const baseUpdatedAt = payload.baseUpdatedAt || null;
+    if (operation.action === "delete") {
+      if (!baseUpdatedAt) {
+        const existing = expectSupabaseResult(await supabaseClient
+          .from("daily_logs")
+          .select("updated_at, deleted_at")
+          .eq("id", operation.entityKey)
+          .maybeSingle());
+        if (!existing) return { serverUpdatedAt: null };
+        throw createSyncConflict("La jornada cambió en otro dispositivo.");
+      }
+      const row = expectUpdatedRecord(await supabaseClient
+        .from("daily_logs")
+        .update({ deleted_at: payload.deletedAt || new Date().toISOString() })
+        .eq("id", operation.entityKey)
+        .eq("updated_at", baseUpdatedAt)
+        .select("updated_at")
+        .maybeSingle(), "La jornada cambió en otro dispositivo.");
+      return { serverUpdatedAt: row.updated_at };
+    }
+
+    const record = dailyLogRecord(payload);
+    if (!baseUpdatedAt) {
+      const row = expectUpdatedRecord(await supabaseClient
+        .from("daily_logs")
+        .insert(record)
+        .select("updated_at")
+        .single(), "Ya existe una versión remota de esta jornada.");
+      return { serverUpdatedAt: row.updated_at };
+    }
+    const row = expectUpdatedRecord(await supabaseClient
+      .from("daily_logs")
+      .update(record)
+      .eq("id", operation.entityKey)
+      .eq("updated_at", baseUpdatedAt)
+      .select("updated_at")
+      .maybeSingle(), "La jornada cambió en otro dispositivo.");
+    return { serverUpdatedAt: row.updated_at };
+  }
+
+  if (operation.entity === "app_catalog") {
+    if (currentProfile?.role !== "admin") throw new Error("Solo el Administrador puede modificar catálogos.");
+    const payload = operation.payload || {};
+    const catalogRecord = {
+      id: "main",
+      facilities: payload.facilities,
+      report_fields: payload.report_fields
+    };
+    if (payload.baseRevision === null || payload.baseRevision === undefined) {
+      const row = expectUpdatedRecord(await supabaseClient
+        .from("app_catalog")
+        .insert(catalogRecord)
+        .select("revision, updated_at")
+        .single(), "Ya existe una versión remota del catálogo.");
+      return { catalogRevision: row.revision, serverUpdatedAt: row.updated_at };
+    }
+    const row = expectUpdatedRecord(await supabaseClient
+      .from("app_catalog")
+      .update(catalogRecord)
+      .eq("id", "main")
+      .eq("revision", payload.baseRevision)
+      .select("revision, updated_at")
+      .maybeSingle(), "El catálogo cambió en otro dispositivo.");
+    return { catalogRevision: row.revision, serverUpdatedAt: row.updated_at };
+  }
+  throw new Error("Operación pendiente no reconocida.");
+}
+
+async function executePendingOperationAgainstLatest(operation, context) {
+  const payload = { ...(operation.payload || {}) };
+  if (operation.entity === "monthly_entry") {
+    const latest = expectSupabaseResult(await supabaseClient
+      .from("monthly_entries")
+      .select("updated_at")
+      .eq("report_id", payload.reportId)
+      .eq("year", payload.year)
+      .eq("month", Number(payload.monthIndex) + 1)
+      .eq("facility_slug", slug(payload.facility))
+      .maybeSingle());
+    assertCurrentSyncContext(context);
+    payload.baseUpdatedAt = latest?.updated_at || null;
+  } else if (operation.entity === "daily_log") {
+    const latest = expectSupabaseResult(await supabaseClient
+      .from("daily_logs")
+      .select("updated_at")
+      .eq("id", operation.entityKey)
+      .maybeSingle());
+    assertCurrentSyncContext(context);
+    payload.baseUpdatedAt = latest?.updated_at || null;
+  } else if (operation.entity === "app_catalog") {
+    const latest = expectSupabaseResult(await supabaseClient
+      .from("app_catalog")
+      .select("revision")
+      .eq("id", "main")
+      .maybeSingle());
+    assertCurrentSyncContext(context);
+    payload.baseRevision = latest?.revision ?? null;
+  }
+  return executePendingOperation({ ...operation, payload });
+}
+
+function recordOperationSuccess(operation, result) {
+  const serverUpdatedAt = result?.serverUpdatedAt || null;
+  const replacement = state.pendingOperations.find(
+    (item) => item.id !== operation.id
+      && item.entity === operation.entity
+      && item.entityKey === operation.entityKey
+  );
+  if (replacement?.payload && serverUpdatedAt) {
+    replacement.payload.baseUpdatedAt = serverUpdatedAt;
+  }
+
+  if (operation.entity === "monthly_entry") {
+    state.entryMeta ||= {};
+    const meta = state.entryMeta[operation.entityKey] || {};
+    if (serverUpdatedAt) {
+      state.entryMeta[operation.entityKey] = {
+        ...meta,
+        server_updated_at: serverUpdatedAt,
+        deleted_at: operation.action === "delete" ? operation.payload?.deletedAt || serverUpdatedAt : null
+      };
+    }
+  } else if (operation.entity === "daily_log" && serverUpdatedAt) {
+    const log = state.dailyLogs.find((item) => item.id === operation.entityKey);
+    if (log) log.server_updated_at = serverUpdatedAt;
+  } else if (operation.entity === "app_catalog") {
+    if (replacement?.payload && result?.catalogRevision) {
+      replacement.payload.baseRevision = Number(result.catalogRevision);
+    }
+    state.catalogMeta = {
+      revision: Number(result?.catalogRevision),
+      updated_at: serverUpdatedAt,
+      local_only: Boolean(replacement)
+    };
+  }
+}
+
+function operationTouchesBucket(operation, monthlyPayload) {
+  if (operation.entity !== "daily_log") return false;
+  const buckets = Array.isArray(operation.payload?.affectedBuckets)
+    ? operation.payload.affectedBuckets
+    : [{
+        year: operation.payload?.year,
+        monthIndex: operation.payload?.monthIndex ?? operation.payload?.month,
+        facility: operation.payload?.facility
+      }];
+  return buckets.some((bucket) => (
+    Number(bucket.year) === Number(monthlyPayload?.year)
+    && Number(bucket.monthIndex) === Number(monthlyPayload?.monthIndex)
+    && slug(bucket.facility) === slug(monthlyPayload?.facility)
+  ));
+}
+
+async function flushPendingOperations(resolveConflicts = false, context = null) {
+  if (!navigator.onLine || !currentSession || !currentProfile) {
+    return { ok: false, fatal: false, conflicts: [] };
+  }
+  assertCurrentSyncContext(context);
+  const priority = { app_catalog: 0, daily_log: 1, monthly_entry: 2 };
+  const operations = [...(state.pendingOperations || [])]
+    .sort((left, right) => (priority[left.entity] ?? 99) - (priority[right.entity] ?? 99));
+  const conflicts = [];
+  for (const operation of operations) {
+    if (!state.pendingOperations.some((item) => item.id === operation.id)) continue;
+    if (
+      operation.entity === "monthly_entry"
+      && operation.payload?.source === "logbook"
+      && conflicts.some((conflict) => operationTouchesBucket(conflict, operation.payload))
+    ) {
+      conflicts.push(operation);
+      continue;
+    }
+    try {
+      let result;
+      try {
+        result = await executePendingOperation(operation);
+        assertCurrentSyncContext(context);
+      } catch (error) {
+        assertCurrentSyncContext(context);
+        if (error?.code !== "SYNC_CONFLICT") throw error;
+        const derivedFromLogbook = operation.entity === "monthly_entry"
+          && operation.payload?.source === "logbook";
+        if (
+          derivedFromLogbook
+          || !resolveConflicts
+          || !confirm(
+            "Otra persona cambió este mismo registro. ¿Desea reemplazar la versión remota con su copia local? Si cancela, ambas versiones se conservarán sin sobrescribir."
+          )
+        ) {
+          conflicts.push(operation);
+          continue;
+        }
+        result = await executePendingOperationAgainstLatest(operation, context);
+        assertCurrentSyncContext(context);
+      }
+      recordOperationSuccess(operation, result);
+      state.pendingOperations = state.pendingOperations.filter((item) => item.id !== operation.id);
+      saveState();
+    } catch (error) {
+      if (error?.code === "STALE_SYNC") throw error;
+      console.error("Error de sincronización:", error);
+      const message = error?.code === "SYNC_CONFLICT"
+        ? "Conflicto de sincronización; se conservó la copia local"
+        : "Error al sincronizar";
+      setSupabaseStatus(`${message} · ${state.pendingOperations.length} pendiente(s)`, false);
+      return { ok: false, fatal: true, conflicts };
+    }
+  }
+  if (conflicts.length) {
+    setSupabaseStatus(
+      `Conflicto de sincronización; pulse el estado para resolver · ${state.pendingOperations.length} pendiente(s)`,
+      false
+    );
+    return { ok: false, fatal: false, conflicts };
+  }
+  return { ok: true, fatal: false, conflicts: [] };
+}
+
+async function fetchAllRowsForYears(table, columns, years, context) {
+  const pageSize = 500;
+  const rows = [];
+  let total = null;
+  let offset = 0;
+  const safeYears = [...new Set(years.map(Number).filter((year) => year >= 2020 && year <= 2035))];
+  if (!safeYears.length) return rows;
+
+  do {
+    const result = await supabaseClient
+      .from(table)
+      .select(columns, { count: "exact" })
+      .in("year", safeYears)
+      .order("id", { ascending: true })
+      .range(offset, offset + pageSize - 1);
+    assertCurrentSyncContext(context);
+    const page = expectSupabaseResult(result) || [];
+    if (total === null) {
+      if (!Number.isInteger(result.count) || result.count < 0) {
+        throw new Error(`Supabase no informó el total de filas de ${table}.`);
+      }
+      total = result.count;
+    }
+    rows.push(...page);
+    offset += page.length;
+    if (!page.length && offset < total) {
+      throw new Error(`Supabase no devolvió todas las filas de ${table}.`);
+    }
+  } while (offset < total);
+
+  return rows;
+}
+
+function rebaseLogbookConflicts(conflicts, monthlyData) {
+  const buckets = new Map();
+  conflicts
+    .filter((operation) => operation.entity === "monthly_entry" && operation.payload?.source === "logbook")
+    .forEach((operation) => {
+      const payload = operation.payload;
+      const bucketKey = [payload.year, payload.monthIndex, slug(payload.facility)].join("|");
+      buckets.set(bucketKey, {
+        year: Number(payload.year),
+        monthIndex: Number(payload.monthIndex),
+        facility: payload.facility
+      });
+    });
+
+  buckets.forEach((bucket) => {
+    Object.keys(defaultReports).forEach((reportId) => {
+      const key = entryKey(reportId, bucket.year, bucket.monthIndex, bucket.facility);
+      const pending = state.pendingOperations.find(
+        (operation) => operation.entity === "monthly_entry" && operation.entityKey === key
+      );
+      // Una edición manual o mixta nunca se sustituye automáticamente.
+      if (pending && pending.payload?.source !== "logbook") return;
+      const remote = monthlyData.find((record) => (
+        record.report_id === reportId
+        && Number(record.year) === bucket.year
+        && Number(record.month) - 1 === bucket.monthIndex
+        && record.facility_slug === slug(bucket.facility)
+      ));
+      const remoteValues = remote && !remote.deleted_at
+        ? normalizeMetricValues(remote.values)
+        : {};
+      state.entries[key] = remoteValues;
+      state.entryMeta ||= {};
+      state.entryMeta[key] = {
+        ...(state.entryMeta[key] || {}),
+        updated_at: remote?.updated_at || new Date().toISOString(),
+        server_updated_at: remote?.updated_at || null,
+        deleted_at: remote?.deleted_at || null
+      };
+      if (pending?.payload) pending.payload.baseUpdatedAt = remote?.updated_at || null;
+    });
+    syncLogbookToMonthlyReports(bucket.facility, bucket.year, bucket.monthIndex);
+  });
+  return buckets.size;
+}
+
+async function syncFromSupabase(context, years = [state.year]) {
+  const [monthlyData, logsData, catalogResult] = await Promise.all([
+    fetchAllRowsForYears(
+      "monthly_entries",
+      "id, report_id, year, month, facility_slug, facility_name, values, updated_at, deleted_at",
+      years,
+      context
+    ),
+    fetchAllRowsForYears(
+      "daily_logs",
+      "id, facility_slug, facility_name, date, year, month, shift, community, notes, values, created_at, updated_at, deleted_at",
+      years,
+      context
+    ),
+    supabaseClient
+      .from("app_catalog")
+      .select("id, facilities, report_fields, revision, updated_at")
+      .eq("id", "main")
+      .maybeSingle()
+  ]);
+  assertCurrentSyncContext(context);
+  const catalogData = expectSupabaseResult(catalogResult);
+  if (catalogData) {
+    applyRemoteCatalog(catalogData);
+  } else if (
+    currentProfile?.role === "admin"
+    && !(state.pendingOperations || []).some((operation) => operation.entity === "app_catalog")
+  ) {
+    queueCatalogUpsert();
+  }
+  applyRemoteRecords(monthlyData);
+  applyRemoteDailyLogs(logsData);
+  saveState();
+  refreshSelectors();
+  return { monthlyCount: monthlyData.length, logCount: logsData.length, monthlyData, logsData };
+}
+
+async function synchronizeWithSupabase(resolveConflicts = false) {
+  if (syncInProgress || !supabaseReady || !supabaseClient || !currentSession) return false;
+  if (!navigator.onLine) {
+    setSupabaseStatus(`Sin red · ${state.pendingOperations?.length || 0} pendiente(s)`, false);
+    return false;
+  }
+
+  syncInProgress = true;
+  const revisionAtStart = queueRevision;
+  const syncContext = {
+    generation: sessionGeneration,
+    userId: currentSession.user.id,
+    storageKey: activeStorageKey
+  };
   const syncDot = $("#syncDot");
   if (syncDot) syncDot.className = "status-indicator syncing";
   setSupabaseStatus("Sincronizando...", false);
-
   try {
-    // 1. Sincronizar registros mensuales
-    const { data: monthlyData, error: monthlyErr } = await supabaseClient
-      .from("monthly_entries")
-      .select("report_id, year, month, facility_name, values")
-      .eq("year", state.year);
-
-    if (monthlyErr) throw monthlyErr;
-    applyRemoteRecords(monthlyData || []);
-
-    // 2. Sincronizar bitácora diaria
-    const { data: logsData, error: logsErr } = await supabaseClient
-      .from("daily_logs")
-      .select("*")
-      .eq("year", state.year);
-
-    if (!logsErr && logsData) {
-      applyRemoteDailyLogs(logsData);
+    const flushResult = await flushPendingOperations(resolveConflicts, syncContext);
+    assertCurrentSyncContext(syncContext);
+    if (!flushResult || flushResult.fatal) return false;
+    const conflictYears = (flushResult.conflicts || [])
+      .map((operation) => Number(operation.payload?.year))
+      .filter((year) => year >= 2020 && year <= 2035);
+    const result = await syncFromSupabase(
+      syncContext,
+      [state.year, ...conflictYears]
+    );
+    assertCurrentSyncContext(syncContext);
+    const dailyConflicts = (flushResult.conflicts || []).filter(
+      (operation) => operation.entity === "daily_log"
+    );
+    const logbookConflicts = (flushResult.conflicts || []).filter(
+      (operation) => operation.entity === "monthly_entry"
+        && operation.payload?.source === "logbook"
+        && !dailyConflicts.some((conflict) => operationTouchesBucket(conflict, operation.payload))
+    );
+    if (logbookConflicts.length) {
+      const rebasedBuckets = rebaseLogbookConflicts(logbookConflicts, result.monthlyData);
+      setSupabaseStatus(
+        `Recalculando ${rebasedBuckets} período(s) con la bitácora completa · ${state.pendingOperations.length} pendiente(s)`,
+        false
+      );
     }
-
-    refreshSelectors();
-    setSupabaseStatus(`Sincronizado (${(monthlyData || []).length} consolidados)`, true);
-  } catch (err) {
-    setSupabaseStatus("Sin conexión al servidor", false);
+    const manualConflicts = (flushResult.conflicts || []).filter(
+      (operation) => !logbookConflicts.includes(operation)
+    );
+    if (manualConflicts.length) {
+      setSupabaseStatus(
+        `Conflicto de sincronización; pulse el estado para resolver · ${state.pendingOperations.length} pendiente(s)`,
+        false
+      );
+      return false;
+    }
+    if (logbookConflicts.length) return false;
+    const pendingCount = state.pendingOperations?.length || 0;
+    if (state.localOnlyMigrationPending) {
+      setSupabaseStatus("Datos locales pendientes de subir · use “Subir Datos Locales”", false);
+    } else {
+      setSupabaseStatus(
+        pendingCount ? `Conectado · ${pendingCount} pendiente(s)` : `Al día · ${result.logCount} jornada(s)`,
+        true
+      );
+    }
+    return pendingCount === 0;
+  } catch (error) {
+    if (error?.code === "STALE_SYNC") return false;
+    console.error("No se pudo sincronizar:", error);
+    setSupabaseStatus(`Error de sincronización: ${error.message || "revise la conexión"}`, false);
+    return false;
+  } finally {
+    syncInProgress = false;
+    if (!isCurrentSyncContext(syncContext)) {
+      if (supabaseReady && currentSession && navigator.onLine) scheduleSynchronization(0);
+    } else if (
+      queueRevision > revisionAtStart
+      && state.pendingOperations?.length
+      && navigator.onLine
+      && currentSession
+    ) {
+      scheduleSynchronization(100);
+    }
   }
-}
-
-async function upsertEntryRemote(reportId, monthIndex, facility, values) {
-  if (!supabaseReady || !supabaseClient || !navigator.onLine) return;
-  const record = entryRecord(reportId, state.year, monthIndex, facility, values);
-
-  const syncDot = $("#syncDot");
-  if (syncDot) syncDot.className = "status-indicator syncing";
-
-  await supabaseClient
-    .from("monthly_entries")
-    .upsert(record, { onConflict: "report_id,year,month,facility_slug" });
-  setSupabaseStatus("Conectado a Supabase", true);
-}
-
-async function upsertDailyLogRemote(log) {
-  if (!supabaseReady || !supabaseClient || !navigator.onLine) return;
-  const payload = {
-    id: log.id,
-    facility_slug: slug(log.facility),
-    facility_name: log.facility,
-    date: log.date,
-    year: log.year,
-    month: log.month + 1,
-    shift: log.shift,
-    community: log.community || "",
-    notes: log.notes || "",
-    values: log.values || {}
-  };
-  await supabaseClient.from("daily_logs").upsert(payload, { onConflict: "id" });
-}
-
-async function deleteDailyLogRemote(logId) {
-  if (!supabaseReady || !supabaseClient || !navigator.onLine) return;
-  await supabaseClient.from("daily_logs").delete().eq("id", logId);
-}
-
-async function deleteEntryRemote(reportId, monthIndex, facility) {
-  if (!supabaseReady || !supabaseClient || !navigator.onLine) return;
-  await supabaseClient
-    .from("monthly_entries")
-    .delete()
-    .eq("report_id", reportId)
-    .eq("year", state.year)
-    .eq("month", monthIndex + 1)
-    .eq("facility_slug", slug(facility));
 }
 
 async function uploadLocalEntries() {
-  if (!supabaseReady || !supabaseClient) {
-    alert("Configure la conexión a Supabase primero.");
-    return;
-  }
-  const records = Object.entries(state.entries).map(([key, values]) => {
+  if (currentProfile?.role !== "admin") return;
+  queueCatalogUpsert();
+  Object.entries(state.entries).forEach(([key, values]) => {
     const [reportId, year, monthIndex, facilitySlug] = key.split("|");
     const facility = state.facilities.find((item) => slug(item) === facilitySlug) || facilitySlug;
-    return entryRecord(reportId, Number(year), Number(monthIndex), facility, values);
+    queueMonthlyUpsert(reportId, Number(year), Number(monthIndex), facility, values);
   });
-
-  if (!records.length && !state.dailyLogs?.length) {
-    alert("No hay datos locales para subir.");
-    return;
+  (state.dailyLogs || []).forEach((log) => upsertDailyLogRemote(log));
+  const success = await synchronizeWithSupabase(true);
+  if (success) {
+    state.localOnlyMigrationPending = false;
+    saveState();
+    setSupabaseStatus("Al día · datos locales sincronizados", true);
   }
-
-  setSupabaseStatus("Subiendo datos locales...", false);
-  try {
-    if (records.length) {
-      await supabaseClient.from("monthly_entries").upsert(records, { onConflict: "report_id,year,month,facility_slug" });
-    }
-    if (state.dailyLogs?.length) {
-      const logsPayload = state.dailyLogs.map((log) => ({
-        id: log.id,
-        facility_slug: slug(log.facility),
-        facility_name: log.facility,
-        date: log.date,
-        year: log.year,
-        month: log.month + 1,
-        shift: log.shift,
-        community: log.community || "",
-        notes: log.notes || "",
-        values: log.values || {}
-      }));
-      await supabaseClient.from("daily_logs").upsert(logsPayload, { onConflict: "id" });
-    }
-    alert("Datos locales subidos exitosamente a Supabase.");
-    setSupabaseStatus("Datos subidos correctamente", true);
-  } catch (err) {
-    alert(`Error al subir: ${err.message}`);
-    setSupabaseStatus(`Error al subir: ${err.message}`, false);
-  }
+  alert(success ? "Datos locales sincronizados correctamente." : "Quedaron datos pendientes. Revise el estado de conexión.");
 }
 
 function entryKey(reportId, year, monthIndex, facility) {
   return [reportId, year, monthIndex, slug(facility)].join("|");
 }
 
-function getEntry(reportId, monthIndex, facility) {
-  const key = entryKey(reportId, state.year, monthIndex, facility);
+function getEntry(reportId, monthIndex, facility, year = state.year) {
+  const key = entryKey(reportId, year, monthIndex, facility);
   return state.entries[key] || {};
 }
 
-function setEntry(reportId, monthIndex, facility, values) {
-  const key = entryKey(reportId, state.year, monthIndex, facility);
-  state.entries[key] = values;
-  saveState();
-
-  if (syncDebounceTimer) clearTimeout(syncDebounceTimer);
-  syncDebounceTimer = setTimeout(() => {
-    void upsertEntryRemote(reportId, monthIndex, facility, values);
-  }, 400);
+function setEntry(reportId, monthIndex, facility, values, year = state.year, source = "manual") {
+  const key = entryKey(reportId, year, monthIndex, facility);
+  state.entries[key] = normalizeMetricValues(values);
+  state.entryMeta ||= {};
+  state.entryMeta[key] = {
+    ...(state.entryMeta[key] || {}),
+    updated_at: new Date().toISOString(),
+    deleted_at: null
+  };
+  queueMonthlyUpsert(reportId, year, monthIndex, facility, state.entries[key], source);
 }
 
 // Helpers de selección
 function reportOptions(select) {
   if (!select) return;
-  select.innerHTML = Object.entries(state.reports)
-    .map(([id, report]) => `<option value="${id}">${report.name}</option>`)
-    .join("");
+  const options = Object.entries(state.reports).map(([id, report]) => {
+    const option = document.createElement("option");
+    option.value = id;
+    option.textContent = String(report.name || id);
+    return option;
+  });
+  select.replaceChildren(...options);
 }
 
 function monthOptions(select) {
   if (!select) return;
-  select.innerHTML = months.map((month, index) => `<option value="${index}">${month}</option>`).join("");
+  const options = months.map((month, index) => {
+    const option = document.createElement("option");
+    option.value = String(index);
+    option.textContent = month;
+    return option;
+  });
+  select.replaceChildren(...options);
 }
 
 function facilityOptions(select) {
   if (!select) return;
-  select.innerHTML = state.facilities.map((facility) => `<option value="${facility}">${facility}</option>`).join("");
+  const options = state.facilities.map((facility) => {
+    const option = document.createElement("option");
+    option.value = String(facility);
+    option.textContent = String(facility);
+    return option;
+  });
+  select.replaceChildren(...options);
 }
 
 function selectedReportId() {
@@ -618,13 +1866,13 @@ function syncLogbookToMonthlyReports(facility, year, monthIndex) {
 
   // Aplicar las sumas de la bitácora a los registros mensuales respetando campos manuales existentes
   Object.entries(reportUpdates).forEach(([repId, fieldsToUpdate]) => {
-    const currentEntry = { ...getEntry(repId, monthIndex, facility) };
+    const currentEntry = { ...getEntry(repId, monthIndex, facility, year) };
     Object.entries(fieldsToUpdate).forEach(([fieldSlug, totalVal]) => {
       if (totalVal > 0 || currentEntry[fieldSlug] !== undefined) {
         currentEntry[fieldSlug] = totalVal;
       }
     });
-    setEntry(repId, monthIndex, facility, currentEntry);
+    setEntry(repId, monthIndex, facility, currentEntry, year, "logbook");
   });
 }
 
@@ -724,21 +1972,25 @@ function renderLogbook() {
     if (v.felinos_vacunados) activityTags.push(`Felinos vac: <strong>${v.felinos_vacunados}</strong>`);
     if (v.monitoreo_cloro) activityTags.push(`Cloro: <strong>${v.monitoreo_cloro}</strong>`);
 
+    const safeId = escapeHtml(log.id);
+    const safeDate = escapeHtml(log.date);
+    const safeCommunity = escapeHtml(log.community || "Comunidad no especificada");
+    const safeNotes = escapeHtml(log.notes || "");
     return `
       <div class="log-card">
         <div class="log-card-header">
           <div class="log-card-title">
-            <span class="log-date">${log.date}</span>
+            <span class="log-date">${safeDate}</span>
             <span class="shift-badge ${shift.cls}">${shift.text}</span>
-            <span class="log-community">📍 ${log.community || 'Comunidad no especificada'}</span>
+            <span class="log-community">📍 ${safeCommunity}</span>
           </div>
           <div class="log-card-actions">
-            <button type="button" class="secondary" data-edit-log="${log.id}">✏️ Editar</button>
-            <button type="button" class="danger" data-delete-log="${log.id}">🗑️</button>
+            <button type="button" class="secondary" data-edit-log="${safeId}">✏️ Editar</button>
+            <button type="button" class="danger" data-delete-log="${safeId}">🗑️</button>
           </div>
         </div>
         ${activityTags.length ? `<div class="log-tags-grid">${activityTags.map(t => `<span class="log-tag">${t}</span>`).join("")}</div>` : ''}
-        ${log.notes ? `<div class="log-notes">📝 "${log.notes}"</div>` : ''}
+        ${safeNotes ? `<div class="log-notes">📝 "${safeNotes}"</div>` : ''}
       </div>
     `;
   }).join("");
@@ -764,7 +2016,7 @@ function renderLogbook() {
 
           if (log) {
             syncLogbookToMonthlyReports(log.facility, log.year, log.month);
-            await deleteDailyLogRemote(logId);
+            deleteDailyLogRemote(log);
           }
 
           renderLogbook();
@@ -805,7 +2057,7 @@ function openLogModal(editingLog = null) {
     $("#logModalTitle").textContent = `Nueva Jornada · ${facility}`;
     $("#editingLogId").value = "";
     // Fecha por defecto: hoy
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localDateString();
     $("#logDateInput").value = today;
     $("#logShiftSelect").value = "manana";
     $("#logCommunityInput").value = "";
@@ -818,6 +2070,7 @@ function openLogModal(editingLog = null) {
 function saveLogFromModal() {
   const facility = $("#logFacilitySelect")?.value || selectedFacility();
   const editingId = $("#editingLogId").value;
+  const previousLog = editingId ? state.dailyLogs?.find((log) => log.id === editingId) : null;
   const dateStr = $("#logDateInput").value;
   const shift = $("#logShiftSelect").value;
   const community = $("#logCommunityInput").value.trim();
@@ -831,6 +2084,10 @@ function saveLogFromModal() {
   const dateObj = new Date(dateStr + "T12:00:00");
   const year = dateObj.getFullYear();
   const month = dateObj.getMonth();
+  if (!Number.isFinite(dateObj.getTime()) || year < 2020 || year > 2035) {
+    alert("La fecha de la jornada no es válida.");
+    return;
+  }
 
   // Recolectar valores de los campos de actividad
   const values = {};
@@ -842,7 +2099,8 @@ function saveLogFromModal() {
     }
   });
 
-  const logId = editingId || `log_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const logId = editingId || createUuid();
+  const now = new Date().toISOString();
   const logRecord = {
     id: logId,
     facility,
@@ -853,7 +2111,9 @@ function saveLogFromModal() {
     community,
     notes,
     values,
-    created_at: new Date().toISOString()
+    created_at: previousLog?.created_at || now,
+    updated_at: now,
+    server_updated_at: previousLog?.server_updated_at || null
   };
 
   if (!state.dailyLogs) state.dailyLogs = [];
@@ -867,11 +2127,20 @@ function saveLogFromModal() {
 
   saveState();
 
-  // Alimentar automáticamente los informes mensuales correspondientes
+  // Recalcular el origen primero si una edición cambió de período o establecimiento.
+  if (previousLog && (
+    previousLog.facility !== facility ||
+    Number(previousLog.year) !== Number(year) ||
+    Number(previousLog.month) !== Number(month)
+  )) {
+    syncLogbookToMonthlyReports(previousLog.facility, previousLog.year, previousLog.month);
+  }
+
+  // Alimentar automáticamente los informes mensuales correspondientes.
   syncLogbookToMonthlyReports(facility, year, month);
 
   // Sincronizar en segundo plano con Supabase si está disponible
-  void upsertDailyLogRemote(logRecord);
+  void upsertDailyLogRemote(logRecord, previousLog);
 
   $("#logModal").close();
   renderLogbook();
@@ -902,11 +2171,12 @@ function renderForm() {
     .map((field) => {
       const fieldId = slug(field);
       const isVisible = !searchQuery || field.toLowerCase().includes(searchQuery);
-      const value = entry[fieldId] ?? "";
+      const value = Number.isFinite(Number(entry[fieldId])) ? Number(entry[fieldId]) : "";
+      const step = fieldId.includes("litros") ? "0.1" : "1";
       return `
         <div class="field-item" style="${isVisible ? '' : 'display: none;'}">
-          <label for="field_${fieldId}">${field}</label>
-          <input id="field_${fieldId}" type="number" min="0" step="1" inputmode="numeric" data-field="${fieldId}" value="${value}" placeholder="0">
+          <label for="field_${fieldId}">${escapeHtml(field)}</label>
+          <input id="field_${fieldId}" type="number" min="0" step="${step}" inputmode="decimal" data-field="${fieldId}" value="${escapeHtml(value)}" placeholder="0">
         </div>
       `;
     })
@@ -925,7 +2195,7 @@ function renderForm() {
       if (rawVal === "") {
         delete values[input.dataset.field];
       } else {
-        values[input.dataset.field] = Math.max(0, parseInt(rawVal, 10) || 0);
+        values[input.dataset.field] = Math.max(0, Number.parseFloat(rawVal) || 0);
       }
       setEntry(reportId, monthIndex, facility, values);
       renderMonthStats();
@@ -965,7 +2235,7 @@ function renderMonthStats() {
     const value = totals[slug(field)] || 0;
     return `
       <div class="stat-card">
-        <span>${field}</span>
+        <span>${escapeHtml(field)}</span>
         <strong>${value.toLocaleString("es-HN")}</strong>
       </div>
     `;
@@ -1007,7 +2277,7 @@ function renderFacilityReport() {
     rowsHtml += `
       <tr>
         <td>${idx + 1}</td>
-        <td>${field}</td>
+        <td>${escapeHtml(field)}</td>
         <td class="num-cell">${val.toLocaleString("es-HN")}</td>
       </tr>
     `;
@@ -1028,6 +2298,7 @@ function renderFacilityReport() {
 // VISTA 3: SUPERVISOR (MONITOREO & CONSOLIDADO MUNICIPAL)
 // =====================================================================
 function renderMonitoringGrid() {
+  if (!canAccessView("supervisor")) return;
   const reportId = $("#monitoringReportSelect")?.value || "dengue";
   const table = $("#monitoringGridTable");
   if (!table) return;
@@ -1039,7 +2310,8 @@ function renderMonitoringGrid() {
   html += `<th>Avance</th></tr></thead><tbody>`;
 
   state.facilities.forEach((fac) => {
-    html += `<tr><td><strong>${fac}</strong></td>`;
+    const safeFacility = escapeHtml(fac);
+    html += `<tr><td><strong>${safeFacility}</strong></td>`;
     let filledMonths = 0;
 
     months.forEach((_, mIdx) => {
@@ -1048,7 +2320,7 @@ function renderMonitoringGrid() {
       if (hasData) filledMonths += 1;
 
       html += `
-        <td class="monitoring-cell" data-facility="${fac}" data-month="${mIdx}" data-report="${reportId}" title="${fac} - ${months[mIdx]} (clic para ver)">
+        <td class="monitoring-cell" data-facility="${safeFacility}" data-month="${mIdx}" data-report="${escapeHtml(reportId)}" title="${safeFacility} - ${months[mIdx]} (clic para ver)">
           <span class="status-cell-badge ${hasData ? 'done' : 'empty'}">
             ${hasData ? '✓' : '—'}
           </span>
@@ -1116,6 +2388,7 @@ function periodLabel() {
 }
 
 function renderSummary() {
+  if (!canAccessView("supervisor")) return;
   const reportId = $("#summaryReportSelect").value || selectedReportId();
   const report = state.reports[reportId];
   const type = $("#periodTypeSelect").value;
@@ -1130,7 +2403,7 @@ function renderSummary() {
     const value = municipalTotals[slug(field)] || 0;
     return `
       <div class="stat-card">
-        <span>${field}</span>
+        <span>${escapeHtml(field)}</span>
         <strong>${value.toLocaleString("es-HN")}</strong>
       </div>
     `;
@@ -1150,10 +2423,10 @@ function renderSummary() {
   ];
 
   $("#summaryTable").innerHTML = `
-    <thead><tr>${head.map((cell) => `<th>${cell}</th>`).join("")}</tr></thead>
+    <thead><tr>${head.map((cell) => `<th>${escapeHtml(cell)}</th>`).join("")}</tr></thead>
     <tbody>
-      ${rows.map((row) => `<tr>${row.map((cell, index) => `<td>${index === 0 ? cell : Number(cell).toLocaleString("es-HN")}</td>`).join("")}</tr>`).join("")}
-      <tr style="font-weight: 800; background: #eaf4ef;">${municipalRow.map((cell, index) => `<th>${index === 0 ? cell : Number(cell).toLocaleString("es-HN")}</th>`).join("")}</tr>
+      ${rows.map((row) => `<tr>${row.map((cell, index) => `<td>${index === 0 ? escapeHtml(cell) : Number(cell).toLocaleString("es-HN")}</td>`).join("")}</tr>`).join("")}
+      <tr style="font-weight: 800; background: #eaf4ef;">${municipalRow.map((cell, index) => `<th>${index === 0 ? escapeHtml(cell) : Number(cell).toLocaleString("es-HN")}</th>`).join("")}</tr>
     </tbody>
   `;
 }
@@ -1161,24 +2434,236 @@ function renderSummary() {
 // =====================================================================
 // VISTA 4: CATÁLOGOS Y AJUSTES
 // =====================================================================
+function hasDuplicateSlug(items, candidate, ignoredIndex = -1) {
+  const candidateSlug = slug(candidate);
+  return !candidateSlug || items.some(
+    (item, index) => index !== ignoredIndex && slug(item) === candidateSlug
+  );
+}
+
+function isMappedReportField(reportId, fieldSlug) {
+  return Object.values(logFieldMapping).some((targets) => targets.some(
+    (target) => target.reportId === reportId && target.fieldSlug === fieldSlug
+  ));
+}
+
+function catalogItemUsedLocally(kind, itemSlug, reportId = null) {
+  if (kind === "facility") {
+    const hasEntry = Object.keys(state.entries || {}).some((key) => key.split("|")[3] === itemSlug);
+    const hasLog = (state.dailyLogs || []).some((log) => slug(log.facility) === itemSlug);
+    const hasPending = (state.pendingOperations || []).some(
+      (operation) => operation.entity !== "app_catalog"
+        && slug(operation.payload?.facility) === itemSlug
+    );
+    return hasEntry || hasLog || hasPending;
+  }
+  return Object.entries(state.entries || {}).some(
+    ([key, values]) => key.split("|")[0] === reportId
+      && Object.prototype.hasOwnProperty.call(values || {}, itemSlug)
+  );
+}
+
+async function catalogItemInUse(kind, itemSlug, reportId = null) {
+  if (catalogItemUsedLocally(kind, itemSlug, reportId)) return true;
+  if (!navigator.onLine || !supabaseClient || !currentSession) {
+    throw new Error("Conéctese a internet para verificar que este elemento no tenga datos históricos.");
+  }
+  const { data, error } = await supabaseClient.rpc("catalog_item_in_use", {
+    p_kind: kind,
+    p_slug: itemSlug,
+    p_report_id: reportId
+  });
+  if (error) throw error;
+  return Boolean(data);
+}
+
+let managedUsersCache = [];
+let managedUsersLoading = false;
+
+function setUserManagementStatus(message, isError = false) {
+  const element = $("#userManagementStatus");
+  if (!element) return;
+  element.textContent = message;
+  element.style.color = isError ? "var(--danger)" : "var(--muted)";
+}
+
+async function invokeUserManagement(action, payload = {}) {
+  if (currentProfile?.role !== "admin" || !supabaseClient || !currentSession) {
+    throw new Error("Solo el Administrador puede gestionar usuarios.");
+  }
+  const { data, error } = await supabaseClient.functions.invoke("manage-users", {
+    body: { action, ...payload }
+  });
+  if (error) {
+    let message = error.message || "No se pudo ejecutar la administración de usuarios.";
+    try {
+      const details = await error.context?.json?.();
+      if (details?.error) message = details.error;
+    } catch (ignored) {}
+    throw new Error(message);
+  }
+  if (!data?.ok) throw new Error(data?.error || "No se pudo completar la operación.");
+  return data;
+}
+
+function renderManagedUsers() {
+  const container = $("#managedUserList");
+  if (!container || currentProfile?.role !== "admin") return;
+  container.replaceChildren();
+
+  if (!managedUsersCache.length) {
+    const empty = document.createElement("p");
+    empty.className = "form-help";
+    empty.textContent = "No hay usuarios disponibles.";
+    container.appendChild(empty);
+    return;
+  }
+
+  managedUsersCache.forEach((user) => {
+    const row = document.createElement("div");
+    row.className = "managed-user-row";
+
+    const identity = document.createElement("div");
+    const name = document.createElement("strong");
+    name.textContent = user.displayName || user.username;
+    const meta = document.createElement("div");
+    meta.className = "managed-user-meta";
+    meta.textContent = `${user.username} · ${roleLabels[user.role] || user.role} · ${user.active ? "Activo" : "Inactivo"}`;
+    identity.append(name, meta);
+
+    const actions = document.createElement("div");
+    actions.className = "managed-user-actions";
+    if (user.role !== "admin") {
+      const statusButton = document.createElement("button");
+      statusButton.type = "button";
+      statusButton.className = user.active ? "secondary" : "primary";
+      statusButton.textContent = user.active ? "Desactivar" : "Activar";
+      statusButton.addEventListener("click", () => void setManagedUserActive(user.id, !user.active));
+
+      const passwordButton = document.createElement("button");
+      passwordButton.type = "button";
+      passwordButton.className = "secondary";
+      passwordButton.textContent = "Contraseña";
+      passwordButton.addEventListener("click", () => openManagedUserPasswordDialog(user));
+      actions.append(statusButton, passwordButton);
+    }
+
+    row.append(identity, actions);
+    container.appendChild(row);
+  });
+}
+
+async function refreshManagedUsers() {
+  if (managedUsersLoading || currentProfile?.role !== "admin") return;
+  managedUsersLoading = true;
+  setUserManagementStatus("Cargando usuarios...");
+  try {
+    const result = await invokeUserManagement("list");
+    managedUsersCache = Array.isArray(result.users) ? result.users : [];
+    renderManagedUsers();
+    setUserManagementStatus(`${managedUsersCache.length} usuario(s) registrado(s).`);
+  } catch (error) {
+    setUserManagementStatus(error.message, true);
+  } finally {
+    managedUsersLoading = false;
+  }
+}
+
+async function createManagedUser(event) {
+  event.preventDefault();
+  if (currentProfile?.role !== "admin") return;
+  const button = $("#createUserBtn");
+  if (button) button.disabled = true;
+  setUserManagementStatus("Creando usuario...");
+  try {
+    await invokeUserManagement("create", {
+      username: $("#newUsername")?.value,
+      displayName: $("#newUserDisplayName")?.value,
+      password: $("#newUserPassword")?.value,
+      role: $("#newUserRole")?.value
+    });
+    $("#userCreateForm")?.reset();
+    setUserManagementStatus("Usuario creado correctamente.");
+    await refreshManagedUsers();
+  } catch (error) {
+    setUserManagementStatus(error.message, true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function setManagedUserActive(userId, active) {
+  setUserManagementStatus(active ? "Activando usuario..." : "Desactivando usuario...");
+  try {
+    await invokeUserManagement("set_active", { userId, active });
+    await refreshManagedUsers();
+  } catch (error) {
+    setUserManagementStatus(error.message, true);
+  }
+}
+
+function openManagedUserPasswordDialog(user) {
+  if (currentProfile?.role !== "admin") return;
+  $("#userPasswordTargetId").value = user.id;
+  $("#userPasswordTarget").textContent = `Usuario: ${user.username}`;
+  $("#managedUserNewPassword").value = "";
+  $("#userPasswordDialog")?.showModal();
+}
+
+async function updateManagedUserPassword(event) {
+  event.preventDefault();
+  const userId = $("#userPasswordTargetId")?.value;
+  const password = $("#managedUserNewPassword")?.value || "";
+  try {
+    await invokeUserManagement("set_password", { userId, password });
+    $("#userPasswordDialog")?.close();
+    setUserManagementStatus("Contraseña actualizada correctamente.");
+  } catch (error) {
+    setUserManagementStatus(error.message, true);
+  }
+}
+
 function renderCatalogs() {
+  if (currentProfile?.role !== "admin") return;
+  void refreshManagedUsers();
   $("#facilityList").innerHTML = state.facilities.map((facility, index) => `
     <div class="editable-row">
-      <input value="${facility}" data-index="${index}" aria-label="Establecimiento ${index + 1}">
+      <input value="${escapeHtml(facility)}" data-index="${index}" aria-label="Establecimiento ${index + 1}">
       <button type="button" class="danger" data-remove-facility="${index}" title="Eliminar">×</button>
     </div>
   `).join("");
 
   $("#facilityList").querySelectorAll("input").forEach((input) => {
-    input.addEventListener("change", () => {
-      state.facilities[Number(input.dataset.index)] = input.value.trim() || `Establecimiento ${Number(input.dataset.index) + 1}`;
-      saveState();
+    input.addEventListener("change", async () => {
+      if (currentProfile?.role !== "admin") return;
+      const index = Number(input.dataset.index);
+      const previous = state.facilities[index];
+      const next = input.value.trim().slice(0, 120) || `Establecimiento ${index + 1}`;
+      input.value = previous;
+      if (next === previous) return;
+      if (hasDuplicateSlug(state.facilities, next, index)) {
+        alert("Ya existe un establecimiento con ese nombre o identificador.");
+        return;
+      }
+      try {
+        if (await catalogItemInUse("facility", slug(previous))) {
+          alert("No se puede renombrar un establecimiento que ya tiene datos históricos.");
+          return;
+        }
+      } catch (error) {
+        alert(error.message || "No se pudo verificar el historial del establecimiento.");
+        return;
+      }
+      if (currentProfile?.role !== "admin" || state.facilities[index] !== previous) return;
+      state.facilities[index] = next;
+      queueCatalogUpsert();
       refreshSelectors();
     });
   });
 
   $("#facilityList").querySelectorAll("[data-remove-facility]").forEach((button) => {
     button.addEventListener("click", () => {
+      if (currentProfile?.role !== "admin") return;
       if (state.facilities.length <= 1) {
         alert("Debe haber al menos un establecimiento registrado.");
         return;
@@ -1186,9 +2671,21 @@ function renderCatalogs() {
       showConfirmDialog(
         "Eliminar establecimiento",
         "¿Está seguro de eliminar este establecimiento de la lista?",
-        () => {
-          state.facilities.splice(Number(button.dataset.removeFacility), 1);
-          saveState();
+        async () => {
+          const index = Number(button.dataset.removeFacility);
+          const facility = state.facilities[index];
+          try {
+            if (await catalogItemInUse("facility", slug(facility))) {
+              alert("No se puede eliminar un establecimiento que ya tiene datos históricos.");
+              return;
+            }
+          } catch (error) {
+            alert(error.message || "No se pudo verificar el historial del establecimiento.");
+            return;
+          }
+          if (currentProfile?.role !== "admin" || state.facilities[index] !== facility) return;
+          state.facilities.splice(index, 1);
+          queueCatalogUpsert();
           refreshSelectors();
         }
       );
@@ -1199,19 +2696,45 @@ function renderCatalogs() {
 }
 
 function renderFieldCatalog() {
+  if (currentProfile?.role !== "admin") return;
   const reportId = $("#catalogReportSelect").value || "dengue";
   const fields = currentFields(reportId);
   $("#fieldList").innerHTML = fields.map((field, index) => `
     <div class="editable-row">
-      <input value="${field}" data-index="${index}" aria-label="Indicador ${index + 1}">
+      <input value="${escapeHtml(field)}" data-index="${index}" aria-label="Indicador ${index + 1}">
       <button type="button" class="danger" data-remove-field="${index}" title="Eliminar">×</button>
     </div>
   `).join("");
 
   $("#fieldList").querySelectorAll("input").forEach((input) => {
-    input.addEventListener("change", () => {
-      fields[Number(input.dataset.index)] = input.value.trim() || `Indicador ${Number(input.dataset.index) + 1}`;
-      saveState();
+    input.addEventListener("change", async () => {
+      if (currentProfile?.role !== "admin") return;
+      const index = Number(input.dataset.index);
+      const previous = fields[index];
+      const next = input.value.trim().slice(0, 160) || `Indicador ${index + 1}`;
+      input.value = previous;
+      if (next === previous) return;
+      if (hasDuplicateSlug(fields, next, index)) {
+        alert("Ya existe un indicador con ese nombre o identificador.");
+        return;
+      }
+      if (isMappedReportField(reportId, slug(previous))) {
+        alert("Este indicador alimenta reportes desde la bitácora y no puede renombrarse.");
+        return;
+      }
+      try {
+        if (await catalogItemInUse("field", slug(previous), reportId)) {
+          alert("No se puede renombrar un indicador que ya tiene datos históricos.");
+          return;
+        }
+      } catch (error) {
+        alert(error.message || "No se pudo verificar el historial del indicador.");
+        return;
+      }
+      if (currentProfile?.role !== "admin" || fields[index] !== previous) return;
+      fields[index] = next;
+      queueCatalogUpsert();
+      renderFieldCatalog();
       renderForm();
       renderSummary();
     });
@@ -1219,16 +2742,33 @@ function renderFieldCatalog() {
 
   $("#fieldList").querySelectorAll("[data-remove-field]").forEach((button) => {
     button.addEventListener("click", () => {
+      if (currentProfile?.role !== "admin") return;
       if (fields.length <= 1) {
         alert("Debe haber al menos un indicador en el informe.");
+        return;
+      }
+      const index = Number(button.dataset.removeField);
+      const field = fields[index];
+      if (isMappedReportField(reportId, slug(field))) {
+        alert("Este indicador alimenta reportes desde la bitácora y no puede eliminarse.");
         return;
       }
       showConfirmDialog(
         "Eliminar indicador",
         "¿Está seguro de eliminar este indicador del informe?",
-        () => {
-          fields.splice(Number(button.dataset.removeField), 1);
-          saveState();
+        async () => {
+          try {
+            if (await catalogItemInUse("field", slug(field), reportId)) {
+              alert("No se puede eliminar un indicador que ya tiene datos históricos.");
+              return;
+            }
+          } catch (error) {
+            alert(error.message || "No se pudo verificar el historial del indicador.");
+            return;
+          }
+          if (currentProfile?.role !== "admin" || fields[index] !== field) return;
+          fields.splice(index, 1);
+          queueCatalogUpsert();
           renderFieldCatalog();
           renderForm();
           renderSummary();
@@ -1271,9 +2811,11 @@ function refreshSelectors() {
   renderLogbook();
   renderForm();
   renderFacilityReport();
-  renderMonitoringGrid();
-  renderSummary();
-  renderCatalogs();
+  if (canAccessView("supervisor")) {
+    renderMonitoringGrid();
+    renderSummary();
+  }
+  if (currentProfile?.role === "admin") renderCatalogs();
 }
 
 function showConfirmDialog(title, message, onConfirm) {
@@ -1636,7 +3178,7 @@ function xlsxActivitiesRows(monthIndexes) {
   const fields = currentFields("actividades");
   const colCount = 16;
   const cumulativeMonths = months.slice(0, finalPeriodMonth(monthIndexes) + 1).map((_, index) => index);
-  const templateFacilities = defaultFacilities;
+  const templateFacilities = state.facilities;
   const rows = Array.from({ length: 56 }, () => []);
 
   rows[0] = [xCell("SECRETARIA DE SALUD", 1, colCount - 1)];
@@ -1752,6 +3294,7 @@ function exportFacilityXlsx() {
 }
 
 function exportSpecificXlsx(reportId) {
+  if (!canAccessView("supervisor")) return;
   const type = $("#periodTypeSelect").value;
   const value = $("#periodValueSelect").value;
   const monthsInPeriod = periodMonths(type, value);
@@ -1784,6 +3327,7 @@ function exportSpecificXlsx(reportId) {
 }
 
 function exportCsv() {
+  if (!canAccessView("supervisor")) return;
   const reportId = $("#summaryReportSelect").value || selectedReportId();
   const fields = currentFields(reportId);
   const type = $("#periodTypeSelect").value;
@@ -1815,6 +3359,13 @@ function downloadBlob(content, filename, type) {
 // NAVEGACIÓN Y ROLES
 // =====================================================================
 function switchView(viewName) {
+  if (!currentProfile) {
+    showLoginScreen();
+    return false;
+  }
+  if (!canAccessView(viewName)) {
+    viewName = initialViewForRole(currentProfile.role);
+  }
   $$(".view").forEach((v) => v.classList.remove("active-view"));
   $$(".nav-button").forEach((b) => b.classList.toggle("active", b.dataset.view === viewName));
   $$(".bottom-nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === viewName));
@@ -1831,29 +3382,29 @@ function switchView(viewName) {
     renderMonitoringGrid();
     renderSummary();
   }
-}
-
-function setRole(role) {
-  localStorage.setItem(userRoleKey, role);
-  $("#roleBtnTechnician").classList.toggle("active", role === "technician");
-  $("#roleBtnSupervisor").classList.toggle("active", role === "supervisor");
-
-  if (role === "technician") {
-    switchView("logbook");
-  } else {
-    switchView("supervisor");
-  }
+  if (viewName === "catalogs" && currentProfile.role === "admin") renderCatalogs();
+  return true;
 }
 
 function bindEvents() {
+  $("#loginForm")?.addEventListener("submit", handleLogin);
+  $("#togglePasswordBtn")?.addEventListener("click", () => {
+    const input = $("#loginPassword");
+    const button = $("#togglePasswordBtn");
+    if (!input || !button) return;
+    const showPassword = input.type === "password";
+    input.type = showPassword ? "text" : "password";
+    button.setAttribute("aria-pressed", String(showPassword));
+    button.textContent = showPassword ? "🙈" : "👁️";
+  });
+  $("#headerLogoutBtn")?.addEventListener("click", () => void handleLogout());
+  $("#sidebarLogoutBtn")?.addEventListener("click", () => void handleLogout());
+  $("#syncStatusBadge")?.addEventListener("click", () => void synchronizeWithSupabase(true));
+
   // Navegación escritorio y móvil
   $$(".nav-button, .bottom-nav-item").forEach((btn) => {
     btn.addEventListener("click", () => switchView(btn.dataset.view));
   });
-
-  // Selector de roles
-  $("#roleBtnTechnician")?.addEventListener("click", () => setRole("technician"));
-  $("#roleBtnSupervisor")?.addEventListener("click", () => setRole("supervisor"));
 
   // Cambio de establecimiento predeterminado en el dispositivo
   $("#deviceDefaultFacility")?.addEventListener("change", (e) => {
@@ -2002,8 +3553,8 @@ function bindEvents() {
     renderFacilityReport();
     renderMonitoringGrid();
     renderSummary();
-    if (supabaseReady) {
-      await syncFromSupabase();
+    if (supabaseReady && currentSession) {
+      await synchronizeWithSupabase();
     }
   });
 
@@ -2016,22 +3567,21 @@ function bindEvents() {
 
   // Respaldo e Importación JSON
   $("#exportJsonBtn")?.addEventListener("click", () => {
+    if (currentProfile?.role !== "admin") return;
     downloadBlob(JSON.stringify(state, null, 2), `respaldo_salud_ambiental_${state.year}.json`, "application/json");
   });
 
   $("#importJsonInput")?.addEventListener("change", async (event) => {
+    if (currentProfile?.role !== "admin") return;
     const file = event.target.files[0];
     if (!file) return;
     try {
       const text = await file.text();
       const parsed = JSON.parse(text);
-      if (!parsed.reports || !parsed.facilities) {
-        throw new Error("El archivo no tiene el formato de respaldo esperado.");
-      }
-      state = parsed;
+      state = normalizeImportedState(parsed);
       saveState();
       refreshSelectors();
-      alert("Respaldo restaurado con éxito.");
+      alert("Respaldo validado y restaurado localmente. Use “Subir Datos Locales” para sincronizarlo.");
     } catch (err) {
       alert(`Error al importar: ${err.message}`);
     }
@@ -2040,18 +3590,46 @@ function bindEvents() {
 
   // Catálogos
   $("#addFacilityBtn")?.addEventListener("click", () => {
-    state.facilities.push(`Establecimiento ${state.facilities.length + 1}`);
-    saveState();
+    if (currentProfile?.role !== "admin") return;
+    let number = state.facilities.length + 1;
+    let name = `Establecimiento ${number}`;
+    while (state.facilities.some((facility) => slug(facility) === slug(name))) {
+      number += 1;
+      name = `Establecimiento ${number}`;
+    }
+    state.facilities.push(name);
+    queueCatalogUpsert();
     refreshSelectors();
   });
 
   $("#resetFacilitiesBtn")?.addEventListener("click", () => {
+    if (currentProfile?.role !== "admin") return;
     showConfirmDialog(
       "Restaurar establecimientos",
       "¿Desea restaurar la lista oficial de los 12 establecimientos de Puerto Cortés?",
-      () => {
+      async () => {
+        const snapshot = [...state.facilities];
+        const changedFacilities = snapshot.filter(
+          (facility) => !defaultFacilities.includes(facility)
+        );
+        try {
+          const usage = await Promise.all(
+            changedFacilities.map((facility) => catalogItemInUse("facility", slug(facility)))
+          );
+          if (usage.some(Boolean)) {
+            alert("No se puede restaurar la lista porque uno de los establecimientos que desaparecería tiene datos históricos.");
+            return;
+          }
+        } catch (error) {
+          alert(error.message || "No se pudo verificar el historial de establecimientos.");
+          return;
+        }
+        if (
+          currentProfile?.role !== "admin"
+          || JSON.stringify(state.facilities) !== JSON.stringify(snapshot)
+        ) return;
         state.facilities = [...defaultFacilities];
-        saveState();
+        queueCatalogUpsert();
         refreshSelectors();
       }
     );
@@ -2059,32 +3637,46 @@ function bindEvents() {
 
   $("#catalogReportSelect")?.addEventListener("change", renderFieldCatalog);
   $("#addFieldBtn")?.addEventListener("click", () => {
+    if (currentProfile?.role !== "admin") return;
     const reportId = $("#catalogReportSelect").value || "dengue";
-    state.reports[reportId].fields.push(`Indicador ${state.reports[reportId].fields.length + 1}`);
-    saveState();
+    const fields = state.reports[reportId].fields;
+    let number = fields.length + 1;
+    let name = `Indicador ${number}`;
+    while (fields.some((field) => slug(field) === slug(name))) {
+      number += 1;
+      name = `Indicador ${number}`;
+    }
+    fields.push(name);
+    queueCatalogUpsert();
     renderFieldCatalog();
     renderForm();
     renderSummary();
   });
 
+  // Usuarios administrados (solo Admin)
+  $("#userCreateForm")?.addEventListener("submit", createManagedUser);
+  $("#refreshUsersBtn")?.addEventListener("click", () => void refreshManagedUsers());
+  $("#userPasswordForm")?.addEventListener("submit", updateManagedUserPassword);
+  $("#cancelUserPasswordBtn")?.addEventListener("click", () => $("#userPasswordDialog")?.close());
+
   // Supabase
-  $("#saveSupabaseConfigBtn")?.addEventListener("click", async () => {
+  $("#saveSupabaseConfigBtn")?.addEventListener("click", () => {
+    if (currentProfile?.role !== "admin") return;
     const config = {
       url: $("#supabaseUrlInput").value.trim(),
       anonKey: $("#supabaseAnonKeyInput").value.trim()
     };
     saveSupabaseConfig(config);
-    if (setupSupabase()) {
-      await syncFromSupabase();
-    }
+    alert("Configuración guardada. La aplicación se reiniciará para conectar de forma segura.");
+    window.location.reload();
   });
 
-  $("#syncSupabaseBtn")?.addEventListener("click", syncFromSupabase);
+  $("#syncSupabaseBtn")?.addEventListener("click", () => void synchronizeWithSupabase(true));
   $("#uploadLocalBtn")?.addEventListener("click", uploadLocalEntries);
 
   window.addEventListener("online", () => {
     setSupabaseStatus("Conexión restablecida", supabaseReady);
-    if (supabaseReady) syncFromSupabase();
+    if (supabaseReady && currentSession) void synchronizeWithSupabase();
   });
 
   window.addEventListener("offline", () => {
@@ -2095,16 +3687,25 @@ function bindEvents() {
 // =====================================================================
 // INICIALIZACIÓN
 // =====================================================================
-async function init() {
+function init() {
   bindEvents();
-  refreshSelectors();
-
-  const savedRole = localStorage.getItem(userRoleKey) || "technician";
-  setRole(savedRole);
-
-  if (setupSupabase()) {
-    await syncFromSupabase();
+  $("#appContainer")?.style.setProperty("display", "none");
+  $("#loginScreen")?.style.setProperty("display", "flex");
+  if (!setupSupabase()) {
+    setLoginError("Sistema no configurado. Contacte al administrador.");
+    setLoginBusy(false);
+    return;
   }
+  setLoginBusy(false);
+  watchAuthState();
 }
 
-void init();
+init();
+
+if ("serviceWorker" in navigator && location.protocol !== "file:") {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js").catch((error) => {
+      console.warn("No se pudo registrar el modo offline:", error);
+    });
+  });
+}

@@ -1,0 +1,7 @@
+{
+  "name": "salud-ambiental-puerto-cortes",
+  "private": true,
+  "scripts": {
+    "test": "node --check app.js && node --check sw.js && node --test"
+  }
+}

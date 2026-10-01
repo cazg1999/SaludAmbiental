@@ -4,497 +4,613 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#16302b">
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; connect-src 'self' https://*.supabase.co wss://*.supabase.co; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'"
+    >
     <title>Salud Ambiental · Puerto Cortés</title>
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="styles.css">
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2"
+      integrity="sha384-WgXwGL6fUsYJWNaKJgVbrJKGRQwc1vieh2oy4kw9nXqpNDz3tdSsqEYUgeHD/NuF"
+      crossorigin="anonymous"
+    ></script>
     <script src="config.js"></script>
   </head>
   <body>
-    <!-- Encabezado superior común -->
-    <header class="app-header">
-      <div class="brand">
-        <span class="brand-mark">SA</span>
-        <div class="brand-text">
-          <h1>Salud Ambiental</h1>
-          <p>Puerto Cortés · Honduras</p>
+    <!-- =====================================================================
+         PANTALLA DE INICIO DE SESIÓN (LOGIN SCREEN RESPONSIVE)
+         ===================================================================== -->
+    <div id="loginScreen" class="login-screen">
+      <div class="login-card">
+        <div class="login-header">
+          <span class="brand-mark login-brand-mark">SA</span>
+          <h2>Salud Ambiental</h2>
+          <p>Puerto Cortés · Acceso al Sistema</p>
+        </div>
+
+        <form id="loginForm" class="login-form">
+          <div id="loginError" class="login-error" role="alert" aria-live="polite" style="display: none;"></div>
+
+          <label>
+            Usuario
+            <input type="text" id="loginUsername" placeholder="Admin, Supervisor o Tecnico" autocomplete="username" maxlength="32" required autocorrect="off" autocapitalize="none">
+          </label>
+
+          <label>
+            Contraseña
+            <div class="password-input-wrap">
+              <input type="password" id="loginPassword" placeholder="Ingrese su contraseña" autocomplete="current-password" maxlength="128" required>
+              <button type="button" id="togglePasswordBtn" class="toggle-pwd-btn" title="Mostrar/ocultar contraseña" aria-label="Mostrar u ocultar contraseña" aria-pressed="false">👁️</button>
+            </div>
+          </label>
+
+          <button type="submit" class="primary login-submit-btn" id="loginSubmitBtn" disabled>
+            Iniciar Sesión
+          </button>
+        </form>
+
+        <div class="login-footer">
+          <p class="login-hint">Sistema de Información de Salud Ambiental</p>
+          <small>Secretaría de Salud de Honduras · Región Cortés</small>
         </div>
       </div>
-
-      <div class="header-controls">
-        <div class="header-pill facility-pill" id="activeFacilityBadge" title="Establecimiento activo">
-          <span class="pill-dot"></span>
-          <span id="headerFacilityText">Cornelio Moncada</span>
-        </div>
-
-        <div class="header-pill status-pill-sync" id="syncStatusBadge" title="Estado de sincronización">
-          <span class="status-indicator" id="syncDot"></span>
-          <span id="syncStatusText">Local</span>
-        </div>
-
-        <div class="year-control">
-          <label for="yearSelect" class="sr-only">Año</label>
-          <input id="yearSelect" type="number" min="2020" max="2035" value="2026" title="Año de trabajo">
-        </div>
-      </div>
-    </header>
-
-    <div class="layout-container">
-      <!-- Navegación lateral en escritorio -->
-      <aside class="sidebar" aria-label="Navegación principal">
-        <div class="role-selector-card">
-          <span class="role-label">Modo de trabajo</span>
-          <div class="role-toggle">
-            <button type="button" class="role-btn active" id="roleBtnTechnician" data-role="technician">Técnico (Campo)</button>
-            <button type="button" class="role-btn" id="roleBtnSupervisor" data-role="supervisor">Supervisor</button>
-          </div>
-        </div>
-
-        <nav class="nav" aria-label="Vistas escritorio">
-          <button class="nav-button active" data-view="logbook">
-            <span class="nav-icon">📔</span>
-            <span>Bitácora diaria</span>
-          </button>
-          <button class="nav-button" data-view="capture">
-            <span class="nav-icon">📝</span>
-            <span>Captura mensual</span>
-          </button>
-          <button class="nav-button" data-view="facilityReport">
-            <span class="nav-icon">📄</span>
-            <span>Reporte del establecimiento</span>
-          </button>
-          <button class="nav-button" data-view="supervisor">
-            <span class="nav-icon">📊</span>
-            <span>Consolidado municipal</span>
-          </button>
-          <button class="nav-button" data-view="catalogs">
-            <span class="nav-icon">⚙️</span>
-            <span>Catálogos y ajustes</span>
-          </button>
-        </nav>
-
-        <div class="sidebar-footer">
-          <div class="device-facility-selector">
-            <label for="deviceDefaultFacility">Mi establecimiento asignado:</label>
-            <select id="deviceDefaultFacility"></select>
-            <small class="helper-text">Se recordará en este dispositivo</small>
-          </div>
-        </div>
-      </aside>
-
-      <!-- Contenido Principal -->
-      <main class="app-main">
-        <!-- VISTA 0: BITÁCORA DIARIA DE CAMPO -->
-        <section id="logbookView" class="view active-view">
-          <div class="view-header">
-            <div>
-              <span class="eyebrow">Registro Diario de Actividades</span>
-              <h2>Bitácora de Campo</h2>
-            </div>
-            <div class="view-actions">
-              <button type="button" class="primary" id="openNewLogBtn">
-                ➕ Nueva jornada
-              </button>
-              <button type="button" class="secondary" id="syncLogbookToMonthlyBtn" title="Consolidar las jornadas registradas a los informes mensuales">
-                🔄 Consolidar a mes
-              </button>
-              <button type="button" class="secondary" id="printLogbookBtn">
-                🖨️ Imprimir bitácora
-              </button>
-            </div>
-          </div>
-
-          <div class="filter-card">
-            <div class="filters-grid">
-              <label>
-                Establecimiento
-                <select id="logFacilitySelect"></select>
-              </label>
-              <label>
-                Mes
-                <select id="logMonthSelect"></select>
-              </label>
-              <label>
-                Filtrar por turno
-                <select id="logShiftFilter">
-                  <option value="all">Todos los turnos</option>
-                  <option value="manana">☀️ Mañana</option>
-                  <option value="tarde">🌇 Tarde / Noche</option>
-                  <option value="completa">🕒 Jornada completa</option>
-                </select>
-              </label>
-            </div>
-          </div>
-
-          <!-- Resumen de lo registrado en la bitácora este mes -->
-          <div class="panel logbook-summary-card">
-            <div class="panel-heading">
-              <div>
-                <h3>Resumen acumulado de jornadas del mes</h3>
-                <p id="logbookSummaryMeta">Cornelio Moncada · Total acumulado de jornadas registradas</p>
-              </div>
-              <span class="status-pill saved" id="logbookEntryCount">0 jornadas</span>
-            </div>
-            <div id="logbookStatsGrid" class="stats-grid"></div>
-          </div>
-
-          <!-- Lista de jornadas de la bitácora -->
-          <div class="panel">
-            <div class="panel-heading">
-              <div>
-                <h3>Jornadas de trabajo registradas</h3>
-                <p>Las actividades ingresadas aquí alimentan automáticamente los informes mensuales correspondientes.</p>
-              </div>
-            </div>
-            <div id="logbookList" class="logbook-timeline"></div>
-          </div>
-        </section>
-
-        <!-- VISTA 1: CAPTURA (TÉCNICO) -->
-        <section id="captureView" class="view">
-          <div class="view-header">
-            <div>
-              <span class="eyebrow">Totales Mensuales</span>
-              <h2 id="captureTitleHeading">Captura mensual por establecimiento</h2>
-            </div>
-            <div class="view-actions">
-              <button type="button" class="secondary" id="quickViewReportBtn">
-                📄 Ver reporte del mes
-              </button>
-            </div>
-          </div>
-
-          <!-- Filtros de captura -->
-          <div class="filter-card">
-            <div class="filters-grid">
-              <label>
-                Establecimiento
-                <select id="facilitySelect"></select>
-              </label>
-              <label>
-                Informe
-                <select id="reportSelect"></select>
-              </label>
-              <label>
-                Mes
-                <select id="monthSelect"></select>
-              </label>
-            </div>
-          </div>
-
-          <div class="capture-layout">
-            <!-- Formulario dinámico -->
-            <section class="panel form-panel">
-              <div class="panel-heading">
-                <div>
-                  <h3 id="captureSectionTitle">Registro mensual</h3>
-                  <p id="captureSectionSubtitle"></p>
-                </div>
-                <div class="save-status-indicator">
-                  <span id="savedState" class="status-pill saved">Guardado</span>
-                </div>
-              </div>
-
-              <!-- Buscador rápido en el formulario -->
-              <div class="form-search-wrap">
-                <input type="search" id="formSearchInput" placeholder="🔍 Buscar indicador rápido..." aria-label="Buscar indicador">
-              </div>
-
-              <div id="dynamicForm" class="form-grid"></div>
-
-              <div class="form-bottom-actions">
-                <button type="button" id="clearMonthBtn" class="danger">
-                  🗑️ Limpiar datos de este mes
-                </button>
-              </div>
-            </section>
-
-            <!-- Resumen de captura mensual -->
-            <aside class="panel stats-panel">
-              <div class="panel-heading">
-                <div>
-                  <h3>Resumen del mes</h3>
-                  <p id="monthStatsSubtitle">Total acumulado en este informe</p>
-                </div>
-              </div>
-              <div id="monthStats" class="stats-grid"></div>
-              <div class="quick-export-card">
-                <h4>Opciones del mes</h4>
-                <p>Genere el reporte de este establecimiento listo para entregar a su supervisor.</p>
-                <div class="stack-buttons">
-                  <button type="button" id="exportFacilityPrintBtn" class="primary">
-                    🖨️ Imprimir / Guardar PDF
-                  </button>
-                  <button type="button" id="exportFacilityXlsxBtn" class="secondary">
-                    📥 Descargar Excel (.xlsx)
-                  </button>
-                </div>
-              </div>
-            </aside>
-          </div>
-        </section>
-
-        <!-- VISTA 2: REPORTE INDIVIDUAL DEL ESTABLECIMIENTO (ENTREGA TÉCNICO) -->
-        <section id="facilityReportView" class="view">
-          <div class="view-header">
-            <div>
-              <span class="eyebrow">Entrega de Informe Individual</span>
-              <h2 id="facilityReportTitle">Reporte del establecimiento</h2>
-            </div>
-            <div class="view-actions">
-              <button type="button" id="printReportBtn" class="primary">
-                🖨️ Imprimir / PDF
-              </button>
-              <button type="button" id="downloadFacilityXlsxBtn" class="secondary">
-                📥 Descargar Excel (.xlsx)
-              </button>
-            </div>
-          </div>
-
-          <div class="filter-card">
-            <div class="filters-grid">
-              <label>
-                Establecimiento
-                <select id="facilityReportSelect"></select>
-              </label>
-              <label>
-                Informe
-                <select id="facilityReportTypeSelect"></select>
-              </label>
-              <label>
-                Mes
-                <select id="facilityReportMonthSelect"></select>
-              </label>
-            </div>
-          </div>
-
-          <!-- Hoja formal de reporte individual (membretada) -->
-          <div class="panel report-preview-paper" id="facilityReportSheet">
-            <div class="report-header-formal">
-              <div class="gov-header">
-                <h3>SECRETARÍA DE SALUD DE HONDURAS</h3>
-                <h4>REGIÓN DEPARTAMENTAL DE SALUD DE CORTÉS (NO. 5)</h4>
-                <h5>COORDINACIÓN DE SALUD DE PUERTO CORTÉS · UNIDAD DE SALUD AMBIENTAL</h5>
-              </div>
-              <div class="report-meta-box">
-                <div class="meta-row">
-                  <div><strong>Informe:</strong> <span id="repDocName">Consolidado de Dengue</span></div>
-                  <div><strong>Establecimiento:</strong> <span id="repDocFacility">Cornelio Moncada</span></div>
-                </div>
-                <div class="meta-row">
-                  <div><strong>Mes:</strong> <span id="repDocMonth">Enero</span></div>
-                  <div><strong>Año:</strong> <span id="repDocYear">2026</span></div>
-                </div>
-              </div>
-            </div>
-
-            <div class="table-wrap">
-              <table id="facilityReportTable" class="formal-table"></table>
-            </div>
-
-            <!-- Sección de firmas oficiales -->
-            <div class="signatures-grid">
-              <div class="signature-box">
-                <div class="sign-line"></div>
-                <p><strong>Técnico en Salud Ambiental</strong></p>
-                <p class="sign-role">Responsable de Campo / Establecimiento</p>
-              </div>
-              <div class="signature-box">
-                <div class="sign-line"></div>
-                <p><strong>Supervisor Municipal</strong></p>
-                <p class="sign-role">Coordinación Salud Ambiental Pto. Cortés</p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- VISTA 3: SUPERVISOR (MONITOREO & CONSOLIDADO MUNICIPAL) -->
-        <section id="supervisorView" class="view">
-          <div class="view-header">
-            <div>
-              <span class="eyebrow">Nivel Municipal</span>
-              <h2>Consolidado y Monitoreo Municipal</h2>
-            </div>
-            <div class="view-actions">
-              <button type="button" id="exportDengueXlsxBtn" class="primary">Excel Dengue</button>
-              <button type="button" id="exportActivitiesXlsxBtn" class="primary">Excel 33 Actividades</button>
-              <button type="button" id="exportRabiaXlsxBtn" class="primary">Excel Rab 05</button>
-              <button type="button" id="exportCsvBtn" class="secondary">Exportar CSV</button>
-              <button type="button" id="printConsolidatedBtn" class="secondary">🖨️ Imprimir</button>
-            </div>
-          </div>
-
-          <!-- Selector de Subvista: Semáforo vs Consolidado -->
-          <div class="subnav-tabs">
-            <button type="button" class="subnav-tab active" data-subtab="monitoring">🚦 Semáforo de Cumplimiento (12 Establecimientos)</button>
-            <button type="button" class="subnav-tab" data-subtab="summary">📋 Tabla de Consolidado Municipal</button>
-          </div>
-
-          <!-- SUBTAB 1: SEMÁFORO DE CUMPLIMIENTO -->
-          <div id="monitoringSubtab" class="subtab-content active-subtab">
-            <div class="filter-card">
-              <div class="filters-grid">
-                <label>
-                  Informe a supervisar
-                  <select id="monitoringReportSelect"></select>
-                </label>
-                <div class="monitoring-legend">
-                  <span class="legend-item"><span class="badge-dot done"></span> Con datos</span>
-                  <span class="legend-item"><span class="badge-dot empty"></span> Pendiente</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h3>Estado de entrega mensual por establecimiento</h3>
-                  <p>Haga clic en cualquier celda para saltar directamente a revisar o capturar los datos de ese establecimiento y mes.</p>
-                </div>
-              </div>
-              <div class="table-wrap">
-                <table id="monitoringGridTable" class="monitoring-table"></table>
-              </div>
-            </div>
-          </div>
-
-          <!-- SUBTAB 2: CONSOLIDADO MUNICIPAL -->
-          <div id="summarySubtab" class="subtab-content">
-            <div class="filter-card">
-              <div class="filters-grid">
-                <label>
-                  Informe
-                  <select id="summaryReportSelect"></select>
-                </label>
-                <label>
-                  Período
-                  <select id="periodTypeSelect">
-                    <option value="month">Mensual</option>
-                    <option value="quarter">Trimestral</option>
-                    <option value="semester">Semestral</option>
-                    <option value="year">Anual completo</option>
-                  </select>
-                </label>
-                <label>
-                  Corte
-                  <select id="periodValueSelect"></select>
-                </label>
-              </div>
-            </div>
-
-            <div class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h3 id="summaryTitle">Consolidado</h3>
-                  <p id="summarySubtitle"></p>
-                </div>
-              </div>
-              <div id="summaryStats" class="stats-grid"></div>
-              <div class="table-wrap">
-                <table id="summaryTable"></table>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- VISTA 4: CATÁLOGOS Y AJUSTES -->
-        <section id="catalogsView" class="view">
-          <div class="view-header">
-            <div>
-              <span class="eyebrow">Mantenimiento y Conectividad</span>
-              <h2>Catálogos y Ajustes</h2>
-            </div>
-            <div class="view-actions">
-              <button type="button" id="exportJsonBtn" class="secondary">💾 Respaldo JSON</button>
-              <label class="import-button" for="importJsonInput">📂 Importar JSON</label>
-              <input id="importJsonInput" type="file" accept="application/json">
-            </div>
-          </div>
-
-          <div class="catalog-layout">
-            <!-- Conexión a Base de Datos -->
-            <section class="panel db-panel">
-              <div class="panel-heading">
-                <div>
-                  <h3>Base de Datos Supabase</h3>
-                  <p id="supabaseStatus">Sin conectar</p>
-                </div>
-              </div>
-              <div class="db-settings">
-                <div class="callout-info">
-                  <strong>Conexión Centralizada:</strong> Los técnicos conectan automáticamente a través de <code>config.js</code>. Si desea sobreescribir la configuración en este dispositivo, puede ingresar credenciales manuales abajo.
-                </div>
-                <label>
-                  Supabase URL
-                  <input id="supabaseUrlInput" type="url" placeholder="https://xxxx.supabase.co">
-                </label>
-                <label>
-                  Supabase anon key
-                  <input id="supabaseAnonKeyInput" type="password" placeholder="eyJhbGciOi...">
-                </label>
-                <div class="form-actions split-actions">
-                  <button type="button" id="saveSupabaseConfigBtn">Guardar y Conectar</button>
-                  <button type="button" id="syncSupabaseBtn" class="secondary">🔄 Sincronizar Ahora</button>
-                  <button type="button" id="uploadLocalBtn" class="secondary">⬆️ Subir Datos Locales</button>
-                </div>
-              </div>
-            </section>
-
-            <!-- Catálogo de Establecimientos -->
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h3>Establecimientos de Salud</h3>
-                  <p>Los 12 centros de salud de Puerto Cortés.</p>
-                </div>
-                <button type="button" id="resetFacilitiesBtn" class="secondary">Restaurar 12 iniciales</button>
-              </div>
-              <div id="facilityList" class="editable-list"></div>
-              <button type="button" id="addFacilityBtn" class="secondary">➕ Agregar establecimiento</button>
-            </section>
-
-            <!-- Catálogo de Indicadores -->
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h3>Indicadores del Informe</h3>
-                  <p>Campos capturados por cada centro de salud.</p>
-                </div>
-              </div>
-              <label class="stacked">
-                Seleccionar informe
-                <select id="catalogReportSelect"></select>
-              </label>
-              <div id="fieldList" class="editable-list"></div>
-              <button type="button" id="addFieldBtn" class="secondary">➕ Agregar indicador</button>
-            </section>
-          </div>
-        </section>
-      </main>
     </div>
 
-    <!-- Barra de Navegación Móvil Inferior (Bottom Bar) -->
-    <nav class="bottom-nav" aria-label="Navegación móvil">
-      <button type="button" class="bottom-nav-item active" data-view="logbook">
-        <span class="b-icon">📔</span>
-        <span class="b-label">Bitácora</span>
-      </button>
-      <button type="button" class="bottom-nav-item" data-view="capture">
-        <span class="b-icon">📝</span>
-        <span class="b-label">Captura</span>
-      </button>
-      <button type="button" class="bottom-nav-item" data-view="facilityReport">
-        <span class="b-icon">📄</span>
-        <span class="b-label">Reporte</span>
-      </button>
-      <button type="button" class="bottom-nav-item" data-view="supervisor">
-        <span class="b-icon">📊</span>
-        <span class="b-label">Supervisor</span>
-      </button>
-      <button type="button" class="bottom-nav-item" data-view="catalogs">
-        <span class="b-icon">⚙️</span>
-        <span class="b-label">Ajustes</span>
-      </button>
-    </nav>
+    <!-- =====================================================================
+         APLICACIÓN PRINCIPAL (VISIBLE TRAS AUTENTICARSE)
+         ===================================================================== -->
+    <div id="appContainer" class="app-wrapper" style="display: none;">
+      <!-- Encabezado superior común -->
+      <header class="app-header">
+        <div class="brand">
+          <span class="brand-mark">SA</span>
+          <div class="brand-text">
+            <h1>Salud Ambiental</h1>
+            <p>Puerto Cortés · Honduras</p>
+          </div>
+        </div>
+
+        <div class="header-controls">
+          <div class="header-pill user-pill" id="activeUserBadge" title="Usuario activo">
+            <span class="pill-dot user-dot"></span>
+            <span id="headerUserText">—</span>
+          </div>
+
+          <div class="header-pill facility-pill" id="activeFacilityBadge" title="Establecimiento activo">
+            <span class="pill-dot"></span>
+            <span id="headerFacilityText">Cornelio Moncada</span>
+          </div>
+
+          <button type="button" class="header-pill status-pill-sync" id="syncStatusBadge" title="Estado de sincronización; pulse para sincronizar">
+            <span class="status-indicator" id="syncDot"></span>
+            <span id="syncStatusText">Local</span>
+          </button>
+
+          <div class="year-control">
+            <label for="yearSelect" class="sr-only">Año</label>
+            <input id="yearSelect" type="number" min="2020" max="2035" value="2026" title="Año de trabajo">
+          </div>
+
+          <button type="button" class="header-logout-btn" id="headerLogoutBtn" title="Cerrar sesión">
+            🚪 <span class="logout-label">Salir</span>
+          </button>
+        </div>
+      </header>
+
+      <div class="layout-container">
+        <!-- Navegación lateral en escritorio -->
+        <aside class="sidebar" aria-label="Navegación principal">
+          <!-- Tarjeta de Perfil de Usuario Autenticado -->
+          <div class="user-profile-card">
+            <div class="user-avatar-circle">👤</div>
+            <div class="user-profile-info">
+              <strong id="sidebarUserName">—</strong>
+              <span id="sidebarUserRole">Sin sesión</span>
+            </div>
+            <button type="button" class="logout-link-btn" id="sidebarLogoutBtn" title="Cerrar sesión">Salir</button>
+          </div>
+
+          <nav class="nav" id="sidebarNav" aria-label="Vistas escritorio">
+            <button class="nav-button active" data-view="logbook">
+              <span class="nav-icon">📔</span>
+              <span>Bitácora diaria</span>
+            </button>
+            <button class="nav-button" data-view="capture">
+              <span class="nav-icon">📝</span>
+              <span>Captura mensual</span>
+            </button>
+            <button class="nav-button" data-view="facilityReport">
+              <span class="nav-icon">📄</span>
+              <span>Reporte del establecimiento</span>
+            </button>
+            <button class="nav-button" data-view="supervisor" id="navItemSupervisor">
+              <span class="nav-icon">📊</span>
+              <span>Consolidado municipal</span>
+            </button>
+            <button class="nav-button" data-view="catalogs" id="navItemCatalogs">
+              <span class="nav-icon">⚙️</span>
+              <span>Catálogos y ajustes</span>
+            </button>
+          </nav>
+
+          <div class="sidebar-footer">
+            <div class="device-facility-selector">
+              <label for="deviceDefaultFacility">Mi establecimiento asignado:</label>
+              <select id="deviceDefaultFacility"></select>
+              <small class="helper-text">Se recordará en este dispositivo</small>
+            </div>
+          </div>
+        </aside>
+
+        <!-- Contenido Principal -->
+        <main class="app-main">
+          <!-- VISTA 0: BITÁCORA DIARIA DE CAMPO -->
+          <section id="logbookView" class="view active-view">
+            <div class="view-header">
+              <div>
+                <span class="eyebrow">Registro Diario de Actividades</span>
+                <h2>Bitácora de Campo</h2>
+              </div>
+              <div class="view-actions">
+                <button type="button" class="primary" id="openNewLogBtn">
+                  ➕ Nueva jornada
+                </button>
+                <button type="button" class="secondary" id="syncLogbookToMonthlyBtn" title="Consolidar las jornadas registradas a los informes mensuales">
+                  🔄 Consolidar a mes
+                </button>
+                <button type="button" class="secondary" id="printLogbookBtn">
+                  🖨️ Imprimir bitácora
+                </button>
+              </div>
+            </div>
+
+            <div class="filter-card">
+              <div class="filters-grid">
+                <label>
+                  Establecimiento
+                  <select id="logFacilitySelect"></select>
+                </label>
+                <label>
+                  Mes
+                  <select id="logMonthSelect"></select>
+                </label>
+                <label>
+                  Filtrar por turno
+                  <select id="logShiftFilter">
+                    <option value="all">Todos los turnos</option>
+                    <option value="manana">☀️ Mañana</option>
+                    <option value="tarde">🌇 Tarde / Noche</option>
+                    <option value="completa">🕒 Jornada completa</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            <!-- Resumen de lo registrado en la bitácora este mes -->
+            <div class="panel logbook-summary-card">
+              <div class="panel-heading">
+                <div>
+                  <h3>Resumen acumulado de jornadas del mes</h3>
+                  <p id="logbookSummaryMeta">Cornelio Moncada · Total acumulado de jornadas registradas</p>
+                </div>
+                <span class="status-pill saved" id="logbookEntryCount">0 jornadas</span>
+              </div>
+              <div id="logbookStatsGrid" class="stats-grid"></div>
+            </div>
+
+            <!-- Lista de jornadas de la bitácora -->
+            <div class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h3>Jornadas de trabajo registradas</h3>
+                  <p>Las actividades ingresadas aquí alimentan automáticamente los informes mensuales correspondientes.</p>
+                </div>
+              </div>
+              <div id="logbookList" class="logbook-timeline"></div>
+            </div>
+          </section>
+
+          <!-- VISTA 1: CAPTURA (TÉCNICO / MENSUAL) -->
+          <section id="captureView" class="view">
+            <div class="view-header">
+              <div>
+                <span class="eyebrow">Totales Mensuales</span>
+                <h2 id="captureTitleHeading">Captura mensual por establecimiento</h2>
+              </div>
+              <div class="view-actions">
+                <button type="button" class="secondary" id="quickViewReportBtn">
+                  📄 Ver reporte del mes
+                </button>
+              </div>
+            </div>
+
+            <!-- Filtros de captura -->
+            <div class="filter-card">
+              <div class="filters-grid">
+                <label>
+                  Establecimiento
+                  <select id="facilitySelect"></select>
+                </label>
+                <label>
+                  Informe
+                  <select id="reportSelect"></select>
+                </label>
+                <label>
+                  Mes
+                  <select id="monthSelect"></select>
+                </label>
+              </div>
+            </div>
+
+            <div class="capture-layout">
+              <!-- Formulario dinámico -->
+              <section class="panel form-panel">
+                <div class="panel-heading">
+                  <div>
+                    <h3 id="captureSectionTitle">Registro mensual</h3>
+                    <p id="captureSectionSubtitle"></p>
+                  </div>
+                  <div class="save-status-indicator">
+                    <span id="savedState" class="status-pill saved">Guardado</span>
+                  </div>
+                </div>
+
+                <!-- Buscador rápido en el formulario -->
+                <div class="form-search-wrap">
+                  <input type="search" id="formSearchInput" placeholder="🔍 Buscar indicador rápido..." aria-label="Buscar indicador">
+                </div>
+
+                <div id="dynamicForm" class="form-grid"></div>
+
+                <div class="form-bottom-actions">
+                  <button type="button" id="clearMonthBtn" class="danger">
+                    🗑️ Limpiar datos de este mes
+                  </button>
+                </div>
+              </section>
+
+              <!-- Resumen de captura mensual -->
+              <aside class="panel stats-panel">
+                <div class="panel-heading">
+                  <div>
+                    <h3>Resumen del mes</h3>
+                    <p id="monthStatsSubtitle">Total acumulado en este informe</p>
+                  </div>
+                </div>
+                <div id="monthStats" class="stats-grid"></div>
+                <div class="quick-export-card">
+                  <h4>Opciones del mes</h4>
+                  <p>Genere el reporte de este establecimiento listo para entregar a su supervisor.</p>
+                  <div class="stack-buttons">
+                    <button type="button" id="exportFacilityPrintBtn" class="primary">
+                      🖨️ Imprimir / Guardar PDF
+                    </button>
+                    <button type="button" id="exportFacilityXlsxBtn" class="secondary">
+                      📥 Descargar Excel (.xlsx)
+                    </button>
+                  </div>
+                </div>
+              </aside>
+            </div>
+          </section>
+
+          <!-- VISTA 2: REPORTE INDIVIDUAL DEL ESTABLECIMIENTO (ENTREGA TÉCNICO) -->
+          <section id="facilityReportView" class="view">
+            <div class="view-header">
+              <div>
+                <span class="eyebrow">Entrega de Informe Individual</span>
+                <h2 id="facilityReportTitle">Reporte del establecimiento</h2>
+              </div>
+              <div class="view-actions">
+                <button type="button" id="printReportBtn" class="primary">
+                  🖨️ Imprimir / PDF
+                </button>
+                <button type="button" id="downloadFacilityXlsxBtn" class="secondary">
+                  📥 Descargar Excel (.xlsx)
+                </button>
+              </div>
+            </div>
+
+            <div class="filter-card">
+              <div class="filters-grid">
+                <label>
+                  Establecimiento
+                  <select id="facilityReportSelect"></select>
+                </label>
+                <label>
+                  Informe
+                  <select id="facilityReportTypeSelect"></select>
+                </label>
+                <label>
+                  Mes
+                  <select id="facilityReportMonthSelect"></select>
+                </label>
+              </div>
+            </div>
+
+            <!-- Hoja formal de reporte individual (membretada) -->
+            <div class="panel report-preview-paper" id="facilityReportSheet">
+              <div class="report-header-formal">
+                <div class="gov-header">
+                  <h3>SECRETARÍA DE SALUD DE HONDURAS</h3>
+                  <h4>REGIÓN DEPARTAMENTAL DE SALUD DE CORTÉS (NO. 5)</h4>
+                  <h5>COORDINACIÓN DE SALUD DE PUERTO CORTÉS · UNIDAD DE SALUD AMBIENTAL</h5>
+                </div>
+                <div class="report-meta-box">
+                  <div class="meta-row">
+                    <div><strong>Informe:</strong> <span id="repDocName">Consolidado de Dengue</span></div>
+                    <div><strong>Establecimiento:</strong> <span id="repDocFacility">Cornelio Moncada</span></div>
+                  </div>
+                  <div class="meta-row">
+                    <div><strong>Mes:</strong> <span id="repDocMonth">Enero</span></div>
+                    <div><strong>Año:</strong> <span id="repDocYear">2026</span></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="table-wrap">
+                <table id="facilityReportTable" class="formal-table"></table>
+              </div>
+
+              <!-- Sección de firmas oficiales -->
+              <div class="signatures-grid">
+                <div class="signature-box">
+                  <div class="sign-line"></div>
+                  <p><strong>Técnico en Salud Ambiental</strong></p>
+                  <p class="sign-role">Responsable de Campo / Establecimiento</p>
+                </div>
+                <div class="signature-box">
+                  <div class="sign-line"></div>
+                  <p><strong>Supervisor Municipal</strong></p>
+                  <p class="sign-role">Coordinación Salud Ambiental Pto. Cortés</p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- VISTA 3: SUPERVISOR (MONITOREO & CONSOLIDADO MUNICIPAL) -->
+          <section id="supervisorView" class="view">
+            <div class="view-header">
+              <div>
+                <span class="eyebrow">Nivel Municipal</span>
+                <h2>Consolidado y Monitoreo Municipal</h2>
+              </div>
+              <div class="view-actions">
+                <button type="button" id="exportDengueXlsxBtn" class="primary">Excel Dengue</button>
+                <button type="button" id="exportActivitiesXlsxBtn" class="primary">Excel 33 Actividades</button>
+                <button type="button" id="exportRabiaXlsxBtn" class="primary">Excel Rab 05</button>
+                <button type="button" id="exportCsvBtn" class="secondary">Exportar CSV</button>
+                <button type="button" id="printConsolidatedBtn" class="secondary">🖨️ Imprimir</button>
+              </div>
+            </div>
+
+            <!-- Selector de Subvista: Semáforo vs Consolidado -->
+            <div class="subnav-tabs">
+              <button type="button" class="subnav-tab active" data-subtab="monitoring">🚦 Semáforo de Cumplimiento (12 Establecimientos)</button>
+              <button type="button" class="subnav-tab" data-subtab="summary">📋 Tabla de Consolidado Municipal</button>
+            </div>
+
+            <!-- SUBTAB 1: SEMÁFORO DE CUMPLIMIENTO -->
+            <div id="monitoringSubtab" class="subtab-content active-subtab">
+              <div class="filter-card">
+                <div class="filters-grid">
+                  <label>
+                    Informe a supervisar
+                    <select id="monitoringReportSelect"></select>
+                  </label>
+                  <div class="monitoring-legend">
+                    <span class="legend-item"><span class="badge-dot done"></span> Con datos</span>
+                    <span class="legend-item"><span class="badge-dot empty"></span> Pendiente</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <h3>Estado de entrega mensual por establecimiento</h3>
+                    <p>Haga clic en cualquier celda para saltar directamente a revisar o capturar los datos de ese establecimiento y mes.</p>
+                  </div>
+                </div>
+                <div class="table-wrap">
+                  <table id="monitoringGridTable" class="monitoring-table"></table>
+                </div>
+              </div>
+            </div>
+
+            <!-- SUBTAB 2: CONSOLIDADO MUNICIPAL -->
+            <div id="summarySubtab" class="subtab-content">
+              <div class="filter-card">
+                <div class="filters-grid">
+                  <label>
+                    Informe
+                    <select id="summaryReportSelect"></select>
+                  </label>
+                  <label>
+                    Período
+                    <select id="periodTypeSelect">
+                      <option value="month">Mensual</option>
+                      <option value="quarter">Trimestral</option>
+                      <option value="semester">Semestral</option>
+                      <option value="year">Anual completo</option>
+                    </select>
+                  </label>
+                  <label>
+                    Corte
+                    <select id="periodValueSelect"></select>
+                  </label>
+                </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <h3 id="summaryTitle">Consolidado</h3>
+                    <p id="summarySubtitle"></p>
+                  </div>
+                </div>
+                <div id="summaryStats" class="stats-grid"></div>
+                <div class="table-wrap">
+                  <table id="summaryTable"></table>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- VISTA 4: CATÁLOGOS Y AJUSTES (SOLO ADMIN) -->
+          <section id="catalogsView" class="view">
+            <div class="view-header">
+              <div>
+                <span class="eyebrow">Mantenimiento y Conectividad</span>
+                <h2>Catálogos y Ajustes</h2>
+              </div>
+              <div class="view-actions">
+                <button type="button" id="exportJsonBtn" class="secondary">💾 Respaldo JSON</button>
+                <label class="import-button" for="importJsonInput">📂 Importar JSON</label>
+                <input id="importJsonInput" type="file" accept="application/json">
+              </div>
+            </div>
+
+            <div class="catalog-layout">
+              <!-- Administración de usuarios -->
+              <section class="panel users-panel">
+                <div class="panel-heading">
+                  <div>
+                    <h3>Usuarios del sistema</h3>
+                    <p>Cree Supervisores y Técnicos. El acceso siempre será con usuario y contraseña.</p>
+                  </div>
+                  <button type="button" id="refreshUsersBtn" class="secondary">Actualizar</button>
+                </div>
+                <form id="userCreateForm" class="user-create-form">
+                  <label>
+                    Usuario
+                    <input id="newUsername" type="text" minlength="3" maxlength="32" pattern="[A-Za-z0-9._-]+" autocomplete="off" placeholder="Ej. tecnico2" required>
+                  </label>
+                  <label>
+                    Nombre para mostrar
+                    <input id="newUserDisplayName" type="text" maxlength="80" autocomplete="off" placeholder="Ej. Carlos López" required>
+                  </label>
+                  <label>
+                    Contraseña temporal
+                    <input id="newUserPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password" required>
+                  </label>
+                  <label>
+                    Rol
+                    <select id="newUserRole" required>
+                      <option value="technician">Técnico</option>
+                      <option value="supervisor">Supervisor</option>
+                    </select>
+                  </label>
+                  <button type="submit" id="createUserBtn">Crear usuario</button>
+                </form>
+                <p id="userManagementStatus" class="form-help" role="status" aria-live="polite"></p>
+                <div id="managedUserList" class="managed-user-list"></div>
+              </section>
+
+              <!-- Conexión a Base de Datos -->
+              <section class="panel db-panel">
+                <div class="panel-heading">
+                  <div>
+                    <h3>Base de Datos Supabase</h3>
+                    <p id="supabaseStatus">Sin conectar</p>
+                  </div>
+                </div>
+                <div class="db-settings">
+                  <div class="callout-info">
+                    <strong>Conexión Centralizada:</strong> Los técnicos conectan automáticamente a través de <code>config.js</code>. Si desea sobreescribir la configuración en este dispositivo, puede ingresar credenciales manuales abajo.
+                  </div>
+                  <label>
+                    Supabase URL
+                    <input id="supabaseUrlInput" type="url" placeholder="https://xxxx.supabase.co">
+                  </label>
+                  <label>
+                    Supabase anon key
+                    <input id="supabaseAnonKeyInput" type="password" placeholder="eyJhbGciOi...">
+                  </label>
+                  <div class="form-actions split-actions">
+                    <button type="button" id="saveSupabaseConfigBtn">Guardar y Conectar</button>
+                    <button type="button" id="syncSupabaseBtn" class="secondary">🔄 Sincronizar Ahora</button>
+                    <button type="button" id="uploadLocalBtn" class="secondary">⬆️ Subir Datos Locales</button>
+                  </div>
+                </div>
+              </section>
+
+              <!-- Catálogo de Establecimientos -->
+              <section class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <h3>Establecimientos de Salud</h3>
+                    <p>Los 12 centros de salud de Puerto Cortés.</p>
+                  </div>
+                  <button type="button" id="resetFacilitiesBtn" class="secondary">Restaurar 12 iniciales</button>
+                </div>
+                <div id="facilityList" class="editable-list"></div>
+                <button type="button" id="addFacilityBtn" class="secondary">➕ Agregar establecimiento</button>
+              </section>
+
+              <!-- Catálogo de Indicadores -->
+              <section class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <h3>Indicadores del Informe</h3>
+                    <p>Campos capturados por cada centro de salud.</p>
+                  </div>
+                </div>
+                <label class="stacked">
+                  Seleccionar informe
+                  <select id="catalogReportSelect"></select>
+                </label>
+                <div id="fieldList" class="editable-list"></div>
+                <button type="button" id="addFieldBtn" class="secondary">➕ Agregar indicador</button>
+              </section>
+            </div>
+
+            <dialog id="userPasswordDialog" class="app-dialog">
+              <form id="userPasswordForm" class="dialog-content">
+                <h3>Cambiar contraseña</h3>
+                <p id="userPasswordTarget"></p>
+                <input id="userPasswordTargetId" type="hidden">
+                <label class="stacked">
+                  Nueva contraseña
+                  <input id="managedUserNewPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password" required>
+                </label>
+                <div class="dialog-actions">
+                  <button type="button" id="cancelUserPasswordBtn" class="secondary">Cancelar</button>
+                  <button type="submit">Guardar contraseña</button>
+                </div>
+              </form>
+            </dialog>
+          </section>
+        </main>
+      </div>
+
+      <!-- Barra de Navegación Móvil Inferior (Bottom Bar Dinámica según Rol) -->
+      <nav class="bottom-nav" id="bottomNav" aria-label="Navegación móvil">
+        <button type="button" class="bottom-nav-item active" data-view="logbook" id="bnavLogbook">
+          <span class="b-icon">📔</span>
+          <span class="b-label">Bitácora</span>
+        </button>
+        <button type="button" class="bottom-nav-item" data-view="capture" id="bnavCapture">
+          <span class="b-icon">📝</span>
+          <span class="b-label">Captura</span>
+        </button>
+        <button type="button" class="bottom-nav-item" data-view="facilityReport" id="bnavReport">
+          <span class="b-icon">📄</span>
+          <span class="b-label">Reporte</span>
+        </button>
+        <button type="button" class="bottom-nav-item" data-view="supervisor" id="bnavSupervisor">
+          <span class="b-icon">📊</span>
+          <span class="b-label">Supervisor</span>
+        </button>
+        <button type="button" class="bottom-nav-item" data-view="catalogs" id="bnavCatalogs">
+          <span class="b-icon">⚙️</span>
+          <span class="b-label">Ajustes</span>
+        </button>
+      </nav>
+    </div>
 
     <!-- Modal de Formulario de Bitácora (Registrar Jornada de Campo) -->
     <dialog id="logModal" class="app-dialog log-dialog">

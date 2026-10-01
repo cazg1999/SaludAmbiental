@@ -1,0 +1,19 @@
+{
+  "name": "Salud Ambiental · Puerto Cortés",
+  "short_name": "Salud Ambiental",
+  "description": "Bitácora, captura mensual y consolidación municipal de Salud Ambiental.",
+  "lang": "es-HN",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f2f5f7",
+  "theme_color": "#16302b",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

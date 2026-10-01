@@ -44,22 +44,60 @@ Resuelve el problema del trabajo dinámico y sin orden fijo (vacunación y abati
 
 ---
 
-## ☁️ Conexión Centralizada a Supabase
+## 🔐 Usuarios y permisos
 
-Para que todos los técnicos se conecten automáticamente al abrir la aplicación en sus teléfonos sin tener que escribir claves:
+La aplicación usa **Supabase Auth**. La interfaz solicita únicamente nombre de usuario y contraseña; internamente utiliza estos alias técnicos:
 
-1. Abra el archivo [`config.js`](config.js).
-2. Pegue su `Project URL` y `anonKey`:
+| Usuario visible | Alias interno de Auth | Permisos |
+| --- | --- | --- |
+| `Admin` | Cuenta interna del propietario | Acceso y control total |
+| `Supervisor` | `supervisor@saludambiental.local` | Todo excepto Catálogos y ajustes |
+| `Tecnico` | `tecnico@saludambiental.local` | Bitácora, captura mensual y reporte del establecimiento |
+
+Las contraseñas no se incluyen ni se verifican en el código del navegador. Deben configurarse directamente en Supabase Authentication.
+
+El Administrador dispone además de **Usuarios del sistema** en Catálogos y ajustes. Desde allí puede crear Supervisores y Técnicos usando solamente usuario y contraseña, activar o desactivar cuentas y cambiar sus contraseñas. Los identificadores internos permanecen ocultos. Estas operaciones se ejecutan en la Edge Function segura [`manage-users`](supabase/functions/manage-users/index.ts); ninguna clave administrativa se entrega al navegador.
+
+### Preparación inicial
+
+1. En **Authentication → Users**, cree manualmente los tres alias anteriores, asigne las contraseñas acordadas y marque las cuentas como confirmadas.
+2. Desactive el registro público de usuarios en la configuración de Authentication.
+3. Ejecute [`supabase/schema.sql`](supabase/schema.sql) en el SQL Editor. Si creó las cuentas después de ejecutar el esquema, ejecute:
+
+   ```sql
+   select public.configure_fixed_accounts();
+   ```
+
+4. Abra [`config.js`](config.js) y pegue únicamente el `Project URL` y la clave pública `anon`/`publishable`:
+
    ```javascript
    const DEFAULT_SUPABASE_CONFIG = {
      url: "https://ejemplo.supabase.co",
      anonKey: "eyJhbGciOi..."
    };
    ```
-3. Ejecute [`supabase/schema.sql`](supabase/schema.sql) en el SQL Editor de su proyecto de Supabase (crea `monthly_entries` y `daily_logs`).
-4. ¡Listo! Cualquier técnico que abra la aplicación estará conectado de forma automática.
 
-*(Nota: También es posible configurar o sobrescribir credenciales manualmente desde la pestaña **Catálogos y Ajustes** > **Base de datos**).*
+Nunca coloque la clave `service_role` en `config.js`. El esquema bloquea completamente el acceso anónimo y autoriza únicamente perfiles activos.
+
+5. Publique la función de administración desde una sesión autenticada de Supabase CLI:
+
+   ```powershell
+   npx supabase functions deploy manage-users --project-ref zgunzfhaudumzpahgcfa
+   ```
+
+La aplicación conserva cambios en una cola local separada por usuario cuando no hay red. Al recuperar conexión usa control de versión: si otro dispositivo cambió el mismo registro, conserva la copia local pendiente y muestra un conflicto en vez de sobrescribir silenciosamente el dato remoto. Para resolverlo, pulse el indicador **Conflicto** de la cabecera y confirme únicamente si desea reemplazar la versión remota. Los borrados también se sincronizan mediante marcas recuperables, no mediante borrado físico.
+
+Los establecimientos e indicadores forman un catálogo compartido. Solo el Administrador puede modificarlo; Supervisor y Técnico reciben automáticamente la versión vigente gracias a las políticas RLS de Supabase. El sistema rechaza duplicados y no permite renombrar o eliminar elementos que ya tengan datos históricos.
+
+### Verificación
+
+Desde la carpeta del proyecto:
+
+```powershell
+npm test
+```
+
+La suite valida sintaxis, referencias de interfaz, matriz de permisos, aislamiento local por usuario, control de conflictos, borrados sincronizables, catálogo compartido y arranque seguro sin configuración.
 
 ---
 

@@ -9,6 +9,6 @@
 // Project Settings > API > Project URL y Project API Keys (anon public).
 
 const DEFAULT_SUPABASE_CONFIG = {
-  url: "",      // Ejemplo: "https://xyzcompany.supabase.co"
-  anonKey: ""   // Ejemplo: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  url: "https://zgunzfhaudumzpahgcfa.supabase.co",
+  anonKey: "sb_publishable_bWAzx7kjzp0flE2E76qEcw_871UsrLq"
 };

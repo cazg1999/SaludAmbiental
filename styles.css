@@ -27,6 +27,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html, body {
   margin: 0;
   padding: 0;
@@ -35,6 +39,125 @@ html, body {
   color: var(--ink);
   background: var(--page);
   -webkit-font-smoothing: antialiased;
+}
+
+/* =====================================================================
+   PANTALLA DE INICIO DE SESIÓN RESPONSIVE
+   ===================================================================== */
+.login-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: radial-gradient(circle at top, #1e4d41 0%, #102823 100%);
+}
+
+.login-card {
+  background: #ffffff;
+  border-radius: var(--radius-lg);
+  padding: 34px 28px;
+  width: 100%;
+  max-width: 400px;
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.login-header {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.login-brand-mark {
+  margin: 0 auto 12px;
+  width: 54px;
+  height: 54px;
+  font-size: 1.45rem;
+}
+
+.login-header h2 {
+  margin: 0;
+  font-size: 1.4rem;
+  color: #123027;
+}
+
+.login-header p {
+  margin: 4px 0 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.login-form {
+  display: grid;
+  gap: 14px;
+}
+
+.login-error {
+  background: #fbeeed;
+  color: #c0392b;
+  border: 1px solid #f5c6cb;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.password-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.password-input-wrap input {
+  padding-right: 44px;
+}
+
+.toggle-pwd-btn {
+  position: absolute;
+  right: 4px;
+  background: transparent;
+  border: 0;
+  min-height: 38px;
+  width: 38px;
+  padding: 0;
+  cursor: pointer;
+  font-size: 1.05rem;
+  color: var(--muted);
+}
+
+.toggle-pwd-btn:hover {
+  background: transparent;
+}
+
+.login-submit-btn {
+  width: 100%;
+  min-height: 48px;
+  font-size: 1rem;
+  margin-top: 6px;
+}
+
+.login-footer {
+  text-align: center;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.login-hint {
+  margin: 0 0 4px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--primary-dark);
+}
+
+.login-footer small {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.app-wrapper {
+  min-height: 100vh;
 }
 
 /* =====================================================================
@@ -103,6 +226,17 @@ html, body {
   white-space: nowrap;
 }
 
+.user-pill {
+  background: rgba(46, 204, 113, 0.16);
+  color: #98e4b7;
+  border: 1px solid rgba(46, 204, 113, 0.35);
+}
+
+.user-dot {
+  background: #2ecc71;
+  box-shadow: 0 0 5px #2ecc71;
+}
+
 .facility-pill {
   background: rgba(217, 166, 43, 0.18);
   color: #ffd875;
@@ -120,6 +254,15 @@ html, body {
   background: rgba(255, 255, 255, 0.12);
   color: #e0ece7;
   border: 1px solid rgba(255, 255, 255, 0.18);
+  min-height: 0;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+}
+
+.status-pill-sync:hover,
+.status-pill-sync:focus-visible {
+  background: rgba(255, 255, 255, 0.2);
 }
 
 .status-indicator {
@@ -145,9 +288,9 @@ html, body {
 }
 
 .year-control input {
-  width: 80px;
+  width: 76px;
   min-height: 32px;
-  padding: 4px 8px;
+  padding: 4px 6px;
   font-size: 0.85rem;
   font-weight: 700;
   background: rgba(255, 255, 255, 0.15);
@@ -161,6 +304,27 @@ html, body {
   background: #ffffff;
   color: var(--ink);
   outline: none;
+}
+
+.header-logout-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  color: #ffffff;
+  padding: 5px 9px;
+  min-height: 32px;
+  border-radius: var(--radius-sm);
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.header-logout-btn:hover {
+  background: rgba(192, 57, 43, 0.8);
+  border-color: rgba(192, 57, 43, 0.9);
 }
 
 .sr-only {
@@ -193,47 +357,66 @@ html, body {
   border-right: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.role-selector-card {
-  background: rgba(0, 0, 0, 0.2);
-  padding: 10px;
+.user-profile-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.22);
+  padding: 10px 12px;
   border-radius: var(--radius-md);
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.role-label {
-  display: block;
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: #9ab4ab;
-  margin-bottom: 6px;
-  font-weight: 700;
-}
-
-.role-toggle {
+.user-avatar-circle {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--primary);
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 4px;
-  background: rgba(0, 0, 0, 0.25);
-  padding: 3px;
-  border-radius: var(--radius-sm);
+  place-items: center;
+  font-size: 1.1rem;
+  flex-shrink: 0;
 }
 
-.role-btn {
+.user-profile-info {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.user-profile-info strong {
+  font-size: 0.88rem;
+  color: #ffffff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.user-profile-info span {
+  font-size: 0.72rem;
+  color: #a4c5bb;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.logout-link-btn {
   background: transparent;
-  border: 0;
+  border: 1px solid rgba(255, 255, 255, 0.2);
   color: #bad3ca;
-  padding: 8px 6px;
-  font-size: 0.76rem;
-  font-weight: 700;
+  font-size: 0.72rem;
+  padding: 4px 8px;
+  min-height: 28px;
   border-radius: 4px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
 }
 
-.role-btn.active {
-  background: var(--accent);
-  color: #14352e;
+.logout-link-btn:hover {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #ffffff;
 }
 
 .nav {
@@ -331,6 +514,12 @@ button, .import-button {
 
 button:hover, .import-button:hover {
   background: var(--primary-dark);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+  transform: none;
 }
 
 button.primary {
@@ -886,6 +1075,62 @@ tbody tr:hover {
 
 .db-panel {
   grid-column: 1 / -1;
+}
+
+.users-panel {
+  grid-column: 1 / -1;
+}
+
+.user-create-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.user-create-form button {
+  min-height: 42px;
+}
+
+.managed-user-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.managed-user-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+
+.managed-user-meta {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.managed-user-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+@media (max-width: 980px) {
+  .user-create-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .user-create-form,
+  .managed-user-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 .callout-info {
