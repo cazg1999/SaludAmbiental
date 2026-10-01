@@ -1,10 +1,10 @@
-const CACHE_NAME = "salud-ambiental-v12";
+const CACHE_NAME = "salud-ambiental-v13";
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css",
-  "./app.js",
-  "./config.js",
+  "./styles.css?v=13",
+  "./app.js?v=13",
+  "./config.js?v=13",
   "./manifest.webmanifest",
   "./icon.svg"
 ];

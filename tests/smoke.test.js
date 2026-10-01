@@ -11,6 +11,7 @@ const app = read("app.js");
 const html = read("index.html");
 const css = read("styles.css");
 const readme = read("README.md");
+const serviceWorker = read("sw.js");
 const schema = read("supabase/schema.sql");
 const manageUsers = read("supabase/functions/manage-users/index.ts");
 const supabaseConfig = read("supabase/config.toml");
@@ -275,6 +276,12 @@ test("PWA assets referenced by the document exist", () => {
   assert.equal(fs.existsSync(path.join(root, "manifest.webmanifest")), true);
   assert.equal(fs.existsSync(path.join(root, "sw.js")), true);
   assert.equal(fs.existsSync(path.join(root, "icon.svg")), true);
+  assert.match(html, /styles\.css\?v=13/);
+  assert.match(html, /config\.js\?v=13/);
+  assert.match(html, /app\.js\?v=13/);
+  assert.match(app, /register\("\.\/sw\.js\?v=13", \{ updateViaCache: "none" \}\)/);
+  assert.match(serviceWorker, /salud-ambiental-v13/);
+  assert.match(serviceWorker, /\.\/app\.js\?v=13/);
 });
 
 test("app boots fail-closed without Supabase configuration", () => {
