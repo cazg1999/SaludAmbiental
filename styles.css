@@ -455,32 +455,6 @@ html, body {
   font-size: 1.15rem;
 }
 
-.sidebar-footer {
-  margin-top: auto;
-  padding-top: 14px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.device-facility-selector label {
-  font-size: 0.74rem;
-  color: #a4c0b6;
-  margin-bottom: 4px;
-  display: block;
-}
-
-.device-facility-selector select {
-  background: #ffffff;
-  color: var(--ink);
-  font-size: 0.85rem;
-}
-
-.helper-text {
-  display: block;
-  font-size: 0.7rem;
-  color: #8dafa3;
-  margin-top: 4px;
-}
-
 .app-main {
   padding: 22px;
   min-width: 0;

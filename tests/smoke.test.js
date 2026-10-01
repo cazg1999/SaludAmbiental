@@ -9,6 +9,8 @@ const root = path.resolve(__dirname, "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 const app = read("app.js");
 const html = read("index.html");
+const css = read("styles.css");
+const readme = read("README.md");
 const schema = read("supabase/schema.sql");
 const manageUsers = read("supabase/functions/manage-users/index.ts");
 const supabaseConfig = read("supabase/config.toml");
@@ -22,7 +24,9 @@ function bootApp(storageEntries = []) {
     location: { protocol: "file:" },
     document: {
       querySelector: () => null,
-      querySelectorAll: () => []
+      querySelectorAll: () => [],
+      addEventListener: () => {},
+      visibilityState: "visible"
     },
     localStorage: {
       getItem: (key) => storage.get(key) ?? null,
@@ -35,6 +39,8 @@ function bootApp(storageEntries = []) {
     },
     setTimeout: () => 0,
     clearTimeout: () => {},
+    setInterval: () => 1,
+    clearInterval: () => {},
     Blob,
     URL,
     alert: () => {},
@@ -96,6 +102,10 @@ test("admin user management is server-side and keeps email out of the login UI",
 });
 
 test("database access is authenticated and anonymous CRUD policies are absent", () => {
+  assert.ok(
+    app.indexOf('typeof DEFAULT_SUPABASE_CONFIG !== "undefined"')
+      < app.indexOf("const localSaved = localStorage.getItem(supabaseConfigKey)")
+  );
   assert.match(schema, /alter table public\.profiles enable row level security/i);
   assert.match(schema, /revoke all on table[\s\S]*from anon/i);
   assert.doesNotMatch(schema, /create policy[^;]+to anon/is);
@@ -160,6 +170,9 @@ test("other vaccinated animals feed the vaccinated-animal total", () => {
 
 test("shared catalog is readable by active users and writable only by admin", () => {
   assert.match(schema, /create table if not exists public\.app_catalog/i);
+  assert.match(schema, /insert into public\.app_catalog[\s\S]*on conflict \(id\) do nothing/i);
+  assert.match(schema, /historical_facilities/);
+  assert.match(schema, /where not exists \(\s*select 1 from public\.app_catalog where id = 'main'/i);
   assert.match(schema, /app_catalog_active_users_read/);
   assert.match(schema, /app_catalog_admin_insert/);
   assert.match(schema, /app_catalog_admin_update/);
@@ -199,6 +212,20 @@ test("multi-device synchronization pages rows and flushes logs before derived to
   assert.match(app, /operationTouchesBucket\(conflict, operation\.payload\)/);
   assert.match(app, /affectedBuckets: affectedLogBuckets\(log, previousLog\)/);
   assert.match(app, /record\.facility_slug === slug\(bucket\.facility\)/);
+  assert.match(app, /const AUTO_SYNC_INTERVAL_MS = 15000/);
+  assert.match(app, /setInterval\(requestAutomaticSync, AUTO_SYNC_INTERVAL_MS\)/);
+  assert.match(app, /window\.addEventListener\("focus", requestAutomaticSync\)/);
+  assert.match(app, /document\.addEventListener\("visibilitychange"/);
+  assert.match(app, /upsertDailyLogRemote\(logRecord, previousLog\);\s*void synchronizeWithSupabase\(\);/);
+  assert.match(app, /if \(catalogChanged\) \{\s*refreshSelectors\(\);\s*\} else \{\s*renderSynchronizedData\(\);/);
+  assert.match(app, /restoreSelectValue\(\$\("#periodValueSelect"\), previousPeriodValue\)/);
+});
+
+test("obsolete device-wide facility selector is fully removed", () => {
+  assert.doesNotMatch(
+    `${app}\n${html}\n${css}\n${readme}`,
+    /deviceDefaultFacility|deviceFacilityKey|device-facility-selector|Mi establecimiento asignado/
+  );
 });
 
 test("manual and logbook writes become mixed while pure logbook rebase preserves remote manual fields", () => {

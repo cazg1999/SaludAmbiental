@@ -16,7 +16,7 @@ Resuelve el problema del trabajo dinámico y sin orden fijo (vacunación y abati
 - **Historial del Mes:** Línea de tiempo con todas las jornadas realizadas, notas de campo y opción de imprimir el soporte de visitas.
 
 ### 2. 📄 Reportes Individuales y Entrega al Supervisor
-- **Asignación en el dispositivo:** El técnico deja seleccionado su centro de salud asignado en su teléfono móvil (por ejemplo, **Cornelio Moncada** o **Baracoa**) para que el dispositivo lo recuerde siempre.
+- **Selección por apartado:** El técnico elige el establecimiento y el mes dentro de la bitácora, captura o reporte que esté usando.
 - **🖨️ Imprimir / Guardar PDF:** Hoja membretada oficial (Secretaría de Salud de Honduras, Región Sanitaria No. 5 de Cortés, Coordinación de Salud de Puerto Cortés) con casillas de firma física para el técnico y supervisor.
 - **📥 Descargar Excel (.xlsx):** Genera el archivo Excel individual del establecimiento correspondiente al mes.
 
@@ -40,7 +40,7 @@ Resuelve el problema del trabajo dinámico y sin orden fijo (vacunación y abati
    - **📄 Mi Reporte:** Vista previa imprimible y descarga en Excel del centro de salud.
    - **📊 Supervisor:** Semáforo de avance y consolidado municipal.
    - **⚙️ Ajustes:** Sincronización y catálogos.
-3. En la barra lateral o ajustes, elija su centro de salud en **"Mi establecimiento asignado"** para que el teléfono lo recuerde siempre.
+3. En cada apartado, elija el establecimiento y el mes que desea consultar o registrar.
 
 ---
 

@@ -181,9 +181,9 @@ function totalVaccinatedAnimals(values = {}) {
 const legacyStorageKey = "saludAmbientalMunicipal.v1";
 const userStoragePrefix = "saludAmbientalMunicipal.user.v1";
 const supabaseConfigKey = "saludAmbientalMunicipal.supabase.v1";
-const deviceFacilityKey = "saludAmbientalMunicipal.deviceFacility";
 const cachedProfileKey = "saludAmbientalMunicipal.authProfile.v1";
 const logoutBarrierKey = "saludAmbientalMunicipal.logoutBarrier.v1";
+const AUTO_SYNC_INTERVAL_MS = 15000;
 
 const loginAliases = Object.freeze({
   admin: "1999cazg@gmail.com",
@@ -219,6 +219,7 @@ let activatingUserId = null;
 let authIntentGeneration = 0;
 let logoutBarrierActive = false;
 let logoutPromise = null;
+let autoSyncIntervalId = null;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => document.querySelectorAll(selector);
@@ -551,16 +552,16 @@ function saveState() {
 
 // Configuración de Supabase
 function loadSupabaseConfig() {
+  if (typeof DEFAULT_SUPABASE_CONFIG !== "undefined" && DEFAULT_SUPABASE_CONFIG.url && DEFAULT_SUPABASE_CONFIG.anonKey) {
+    return DEFAULT_SUPABASE_CONFIG;
+  }
+
   const localSaved = localStorage.getItem(supabaseConfigKey);
   if (localSaved) {
     try {
       const parsed = JSON.parse(localSaved);
       if (parsed.url && parsed.anonKey) return parsed;
     } catch (e) {}
-  }
-
-  if (typeof DEFAULT_SUPABASE_CONFIG !== "undefined" && DEFAULT_SUPABASE_CONFIG.url && DEFAULT_SUPABASE_CONFIG.anonKey) {
-    return DEFAULT_SUPABASE_CONFIG;
   }
 
   return { url: "", anonKey: "" };
@@ -707,10 +708,22 @@ function setLogoutBarrier(active) {
 }
 
 function showLoginScreen(message = null) {
+  stopAutomaticSync();
   authIntentGeneration += 1;
   currentSession = null;
   currentProfile = null;
   clearActiveUserState();
+  [
+    "#reportSelect", "#summaryReportSelect", "#catalogReportSelect",
+    "#facilityReportTypeSelect", "#monitoringReportSelect",
+    "#monthSelect", "#facilityReportMonthSelect", "#logMonthSelect",
+    "#facilitySelect", "#facilityReportSelect", "#logFacilitySelect",
+    "#periodValueSelect"
+  ].forEach((selector) => {
+    const select = $(selector);
+    if (select) select.value = "";
+  });
+  if ($("#periodTypeSelect")) $("#periodTypeSelect").value = "month";
   $("#appContainer")?.style.setProperty("display", "none");
   $("#loginScreen")?.style.setProperty("display", "flex");
   $$("dialog[open]").forEach((dialog) => dialog.close());
@@ -790,6 +803,7 @@ async function activateSession(session) {
   if (activatingUserId === session.user.id) return;
   if (currentSession?.user?.id === session.user.id && currentProfile?.id === session.user.id) {
     currentSession = session;
+    startAutomaticSync();
     return;
   }
 
@@ -816,6 +830,7 @@ async function activateSession(session) {
     refreshSelectors();
     switchView(initialViewForRole(profile.role));
     await synchronizeWithSupabase();
+    startAutomaticSync();
   } catch (error) {
     if (activationIntent !== authIntentGeneration) return;
     console.error("No se pudo activar la sesión:", error);
@@ -952,12 +967,19 @@ function normalizeRemoteCatalog(record) {
 }
 
 function applyRemoteCatalog(record) {
-  if (!record) return;
+  if (!record) return false;
   const hasPendingCatalog = (state.pendingOperations || []).some(
     (operation) => operation.entity === "app_catalog"
   );
-  if (hasPendingCatalog || (currentProfile?.role === "admin" && state.catalogMeta?.local_only)) return;
+  if (hasPendingCatalog || (currentProfile?.role === "admin" && state.catalogMeta?.local_only)) return false;
   const catalog = normalizeRemoteCatalog(record);
+  const catalogChanged = (
+    JSON.stringify(state.facilities) !== JSON.stringify(catalog.facilities)
+    || Object.keys(defaultReports).some((reportId) => (
+      JSON.stringify(state.reports[reportId]?.fields || [])
+        !== JSON.stringify(catalog.reports[reportId]?.fields || [])
+    ))
+  );
   state.facilities = catalog.facilities;
   state.reports = catalog.reports;
   state.catalogMeta = {
@@ -965,6 +987,7 @@ function applyRemoteCatalog(record) {
     updated_at: record.updated_at || null,
     local_only: false
   };
+  return catalogChanged;
 }
 
 function queueCatalogUpsert() {
@@ -1092,6 +1115,24 @@ function scheduleSynchronization(delay = 500) {
     syncDebounceTimer = null;
     void synchronizeWithSupabase();
   }, delay);
+}
+
+function requestAutomaticSync() {
+  if (document.visibilityState === "hidden") return;
+  if (supabaseReady && currentSession && navigator.onLine) {
+    void synchronizeWithSupabase();
+  }
+}
+
+function startAutomaticSync() {
+  if (autoSyncIntervalId !== null) return;
+  autoSyncIntervalId = setInterval(requestAutomaticSync, AUTO_SYNC_INTERVAL_MS);
+}
+
+function stopAutomaticSync() {
+  if (autoSyncIntervalId === null) return;
+  clearInterval(autoSyncIntervalId);
+  autoSyncIntervalId = null;
 }
 
 function queueOperation(operation) {
@@ -1644,8 +1685,9 @@ async function syncFromSupabase(context, years = [state.year]) {
   ]);
   assertCurrentSyncContext(context);
   const catalogData = expectSupabaseResult(catalogResult);
+  let catalogChanged = false;
   if (catalogData) {
-    applyRemoteCatalog(catalogData);
+    catalogChanged = applyRemoteCatalog(catalogData);
   } else if (
     currentProfile?.role === "admin"
     && !(state.pendingOperations || []).some((operation) => operation.entity === "app_catalog")
@@ -1655,7 +1697,11 @@ async function syncFromSupabase(context, years = [state.year]) {
   applyRemoteRecords(monthlyData);
   applyRemoteDailyLogs(logsData);
   saveState();
-  refreshSelectors();
+  if (catalogChanged) {
+    refreshSelectors();
+  } else {
+    renderSynchronizedData();
+  }
   return { monthlyCount: monthlyData.length, logCount: logsData.length, monthlyData, logsData };
 }
 
@@ -2150,7 +2196,8 @@ function saveLogFromModal() {
   syncLogbookToMonthlyReports(facility, year, month);
 
   // Sincronizar en segundo plano con Supabase si está disponible
-  void upsertDailyLogRemote(logRecord, previousLog);
+  upsertDailyLogRemote(logRecord, previousLog);
+  void synchronizeWithSupabase();
 
   $("#logModal").close();
   renderLogbook();
@@ -2812,43 +2859,80 @@ function renderFieldCatalog() {
 }
 
 function refreshSelectors() {
-  reportOptions($("#reportSelect"));
-  reportOptions($("#summaryReportSelect"));
-  reportOptions($("#catalogReportSelect"));
-  reportOptions($("#facilityReportTypeSelect"));
-  reportOptions($("#monitoringReportSelect"));
+  const restoreSelectValue = (select, previousValue) => {
+    if (!select || !previousValue) return;
+    if (Array.from(select.options).some((option) => option.value === previousValue)) {
+      select.value = previousValue;
+    }
+  };
 
-  monthOptions($("#monthSelect"));
-  monthOptions($("#facilityReportMonthSelect"));
-  monthOptions($("#logMonthSelect"));
+  const reportSelectors = [
+    $("#reportSelect"),
+    $("#summaryReportSelect"),
+    $("#catalogReportSelect"),
+    $("#facilityReportTypeSelect"),
+    $("#monitoringReportSelect")
+  ];
+  const previousReports = reportSelectors.map((select) => select?.value || "");
+  reportSelectors.forEach(reportOptions);
+  reportSelectors.forEach((select, index) => restoreSelectValue(select, previousReports[index]));
 
-  facilityOptions($("#facilitySelect"));
-  facilityOptions($("#facilityReportSelect"));
-  facilityOptions($("#logFacilitySelect"));
-  facilityOptions($("#deviceDefaultFacility"));
+  const monthSelectors = [
+    $("#monthSelect"),
+    $("#facilityReportMonthSelect"),
+    $("#logMonthSelect")
+  ];
+  const previousMonths = monthSelectors.map((select) => select?.value || "");
+  monthSelectors.forEach(monthOptions);
+  monthSelectors.forEach((select, index) => restoreSelectValue(select, previousMonths[index]));
 
-  const savedFacility = localStorage.getItem(deviceFacilityKey);
-  const activeFac = (savedFacility && state.facilities.includes(savedFacility))
-    ? savedFacility
-    : state.facilities[0] || "Cornelio Moncada";
+  const facilitySelectors = [
+    $("#facilitySelect"),
+    $("#facilityReportSelect"),
+    $("#logFacilitySelect")
+  ];
+  const previousFacilities = facilitySelectors.map((select) => select?.value || "");
+  facilitySelectors.forEach(facilityOptions);
 
-  $("#deviceDefaultFacility").value = activeFac;
-  $("#facilitySelect").value = activeFac;
-  $("#facilityReportSelect").value = activeFac;
-  $("#logFacilitySelect").value = activeFac;
-  $("#headerFacilityText").textContent = activeFac;
+  const fallbackFacility = state.facilities[0] || "Cornelio Moncada";
+  facilitySelectors.forEach((select, index) => {
+    if (!select) return;
+    const previousFacility = previousFacilities[index];
+    select.value = state.facilities.includes(previousFacility)
+      ? previousFacility
+      : fallbackFacility;
+  });
+  const activeFacility = $("#facilitySelect")?.value || fallbackFacility;
+  if ($("#headerFacilityText")) $("#headerFacilityText").textContent = activeFacility;
 
   $("#yearSelect").value = state.year;
 
+  const previousPeriodValue = $("#periodValueSelect")?.value || "";
   renderPeriodValues();
+  restoreSelectValue($("#periodValueSelect"), previousPeriodValue);
   renderLogbook();
-  renderForm();
+  if (!document.activeElement?.closest?.("#dynamicForm")) renderForm();
+  else renderMonthStats();
   renderFacilityReport();
   if (canAccessView("supervisor")) {
     renderMonitoringGrid();
     renderSummary();
   }
-  if (currentProfile?.role === "admin") renderCatalogs();
+  if (
+    currentProfile?.role === "admin"
+    && !document.activeElement?.closest?.("#facilityList, #fieldList")
+  ) renderCatalogs();
+}
+
+function renderSynchronizedData() {
+  renderLogbook();
+  if (!document.activeElement?.closest?.("#dynamicForm")) renderForm();
+  else renderMonthStats();
+  renderFacilityReport();
+  if (canAccessView("supervisor")) {
+    renderMonitoringGrid();
+    renderSummary();
+  }
 }
 
 function showConfirmDialog(title, message, onConfirm) {
@@ -3414,6 +3498,7 @@ function switchView(viewName) {
   if (viewName === "supervisor") {
     renderMonitoringGrid();
     renderSummary();
+    if (currentSession && !activatingUserId) requestAutomaticSync();
   }
   if (viewName === "catalogs" && currentProfile.role === "admin") renderCatalogs();
   return true;
@@ -3437,19 +3522,6 @@ function bindEvents() {
   // Navegación escritorio y móvil
   $$(".nav-button, .bottom-nav-item").forEach((btn) => {
     btn.addEventListener("click", () => switchView(btn.dataset.view));
-  });
-
-  // Cambio de establecimiento predeterminado en el dispositivo
-  $("#deviceDefaultFacility")?.addEventListener("change", (e) => {
-    const fac = e.target.value;
-    localStorage.setItem(deviceFacilityKey, fac);
-    $("#facilitySelect").value = fac;
-    $("#facilityReportSelect").value = fac;
-    $("#logFacilitySelect").value = fac;
-    $("#headerFacilityText").textContent = fac;
-    renderLogbook();
-    renderForm();
-    renderFacilityReport();
   });
 
   // Eventos de la Bitácora
@@ -3716,6 +3788,11 @@ function bindEvents() {
 
   window.addEventListener("offline", () => {
     setSupabaseStatus("Sin conexión a internet (Modo local)", false);
+  });
+
+  window.addEventListener("focus", requestAutomaticSync);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") requestAutomaticSync();
   });
 }
 

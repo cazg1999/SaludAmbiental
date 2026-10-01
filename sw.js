@@ -1,4 +1,4 @@
-const CACHE_NAME = "salud-ambiental-v11";
+const CACHE_NAME = "salud-ambiental-v12";
 const APP_SHELL = [
   "./",
   "./index.html",
