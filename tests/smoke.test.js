@@ -81,7 +81,7 @@ test("admin user management is server-side and keeps email out of the login UI",
   assert.match(html, /id="managedUserList"/);
   assert.match(app, /functions\.invoke\("manage-users"/);
   assert.match(app, /loginEmailForUsername/);
-  assert.match(schema, /salud_ambiental_managed/);
+  assert.match(manageUsers, /salud_ambiental_managed/);
   assert.match(manageUsers, /auth\.admin\.createUser/);
   assert.match(manageUsers, /auth\.admin\.updateUserById/);
   assert.match(manageUsers, /callerRole !== "admin"/);
@@ -104,8 +104,8 @@ test("admin user management is server-side and keeps email out of the login UI",
 
 test("database access is authenticated and anonymous CRUD policies are absent", () => {
   assert.ok(
-    app.indexOf('typeof DEFAULT_SUPABASE_CONFIG !== "undefined"')
-      < app.indexOf("const localSaved = localStorage.getItem(supabaseConfigKey)")
+    app.indexOf("const localSaved = localStorage.getItem(supabaseConfigKey)")
+      < app.indexOf('typeof DEFAULT_SUPABASE_CONFIG !== "undefined"')
   );
   assert.match(schema, /alter table public\.profiles enable row level security/i);
   assert.match(schema, /revoke all on table[\s\S]*from anon/i);
@@ -198,6 +198,70 @@ test("daily log IDs and offline writes use the safe queue", () => {
   assert.doesNotMatch(app, /log_\$\{Date\.now\(\)\}/);
 });
 
+test("a technician daily log is inserted remotely and removed from the local queue", async () => {
+  const { context } = bootApp();
+  vm.runInContext(`
+    remoteWrites = [];
+    currentSession = { user: { id: "user-1" } };
+    currentProfile = { id: "user-1", role: "technician", active: true };
+    state.dailyLogs = [{
+      id: "11111111-1111-4111-8111-111111111111",
+      facility: "Cornelio Moncada",
+      date: "2026-10-02",
+      year: 2026,
+      month: 9,
+      shift: "manana",
+      community: "Centro",
+      notes: "",
+      values: { viviendas_inspeccionadas: 2 },
+      created_at: "2026-10-02T12:00:00.000Z",
+      updated_at: "2026-10-02T12:00:00.000Z",
+      server_updated_at: null
+    }];
+    state.pendingOperations = [];
+    supabaseClient = {
+      from(table) {
+        return {
+          insert(record) {
+            remoteWrites.push({ table, record });
+            return {
+              select() {
+                return {
+                  single() {
+                    return { data: { updated_at: "2026-10-02T12:00:01.000Z" }, error: null };
+                  }
+                };
+              }
+            };
+          }
+        };
+      }
+    };
+    upsertDailyLogRemote(state.dailyLogs[0]);
+  `, context);
+
+  const result = await vm.runInContext(`flushPendingOperations(false, {
+    generation: sessionGeneration,
+    userId: currentSession.user.id,
+    storageKey: activeStorageKey
+  })`, context);
+
+  assert.equal(result.ok, true);
+  assert.equal(vm.runInContext("remoteWrites.length", context), 1);
+  assert.equal(vm.runInContext("remoteWrites[0].table", context), "daily_logs");
+  assert.equal(vm.runInContext("state.pendingOperations.length", context), 0);
+  assert.equal(
+    vm.runInContext("state.dailyLogs[0].server_updated_at", context),
+    "2026-10-02T12:00:01.000Z"
+  );
+});
+
+test("active profiles are the shared authorization source for client and RLS", () => {
+  assert.match(app, /!profile\.active \|\| profile\.id !== session\.user\.id/);
+  assert.match(schema, /where profiles\.id = auth\.uid\(\)\s+and profiles\.active = true/i);
+  assert.doesNotMatch(schema.match(/create or replace function public\.current_app_role\(\)[\s\S]*?\$\$;/i)?.[0] || "", /auth\.users|raw_app_meta_data|1999cazg@gmail\.com/);
+});
+
 test("logout remains closed until an explicit successful login", () => {
   assert.match(app, /logoutBarrierKey/);
   assert.match(app, /setLogoutBarrier\(true\)[\s\S]{0,240}signOut/);
@@ -215,9 +279,12 @@ test("multi-device synchronization pages rows and flushes logs before derived to
   assert.match(app, /record\.facility_slug === slug\(bucket\.facility\)/);
   assert.match(app, /const AUTO_SYNC_INTERVAL_MS = 15000/);
   assert.match(app, /setInterval\(requestAutomaticSync, AUTO_SYNC_INTERVAL_MS\)/);
+  assert.match(app, /\.channel\(`salud-ambiental-sync-/);
+  assert.match(app, /table: "daily_logs"/);
+  assert.match(schema, /alter publication supabase_realtime add table public\.daily_logs/i);
   assert.match(app, /window\.addEventListener\("focus", requestAutomaticSync\)/);
   assert.match(app, /document\.addEventListener\("visibilitychange"/);
-  assert.match(app, /upsertDailyLogRemote\(logRecord, previousLog\);\s*void synchronizeWithSupabase\(\);/);
+  assert.match(app, /upsertDailyLogRemote\(logRecord, previousLog\);[\s\S]{0,1200}const synchronized = await synchronizeWithSupabase\(\);/);
   assert.match(app, /if \(catalogChanged\) \{\s*refreshSelectors\(\);\s*\} else \{\s*renderSynchronizedData\(\);/);
   assert.match(app, /restoreSelectValue\(\$\("#periodValueSelect"\), previousPeriodValue\)/);
 });
@@ -317,12 +384,12 @@ test("PWA assets referenced by the document exist", () => {
   assert.equal(fs.existsSync(path.join(root, "manifest.webmanifest")), true);
   assert.equal(fs.existsSync(path.join(root, "sw.js")), true);
   assert.equal(fs.existsSync(path.join(root, "icon.svg")), true);
-  assert.match(html, /styles\.css\?v=13/);
-  assert.match(html, /config\.js\?v=13/);
-  assert.match(html, /app\.js\?v=13/);
-  assert.match(app, /register\("\.\/sw\.js\?v=13", \{ updateViaCache: "none" \}\)/);
-  assert.match(serviceWorker, /salud-ambiental-v13/);
-  assert.match(serviceWorker, /\.\/app\.js\?v=13/);
+  assert.match(html, /styles\.css\?v=14/);
+  assert.match(html, /config\.js\?v=14/);
+  assert.match(html, /app\.js\?v=14/);
+  assert.match(app, /register\("\.\/sw\.js\?v=14", \{ updateViaCache: "none" \}\)/);
+  assert.match(serviceWorker, /salud-ambiental-v14/);
+  assert.match(serviceWorker, /\.\/app\.js\?v=14/);
 });
 
 test("app boots fail-closed without Supabase configuration", () => {

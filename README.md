@@ -68,6 +68,8 @@ El Administrador dispone además de **Usuarios del sistema** en Catálogos y aju
    select public.configure_fixed_accounts();
    ```
 
+   Si la base ya estaba instalada antes de la versión de sincronización entre dispositivos, ejecute además la migración idempotente [`supabase/migrations/20261002120000_reliable_cross_device_sync.sql`](supabase/migrations/20261002120000_reliable_cross_device_sync.sql). Esta habilita las escrituras para todo perfil activo y registra las tablas operativas en Supabase Realtime.
+
 4. Abra [`config.js`](config.js) y pegue únicamente el `Project URL` y la clave pública `anon`/`publishable`:
 
    ```javascript
@@ -85,7 +87,9 @@ Nunca coloque la clave `service_role` en `config.js`. El esquema bloquea complet
    npx supabase functions deploy manage-users --project-ref zgunzfhaudumzpahgcfa
    ```
 
-La aplicación conserva cambios en una cola local separada por usuario cuando no hay red. Al recuperar conexión usa control de versión: si otro dispositivo cambió el mismo registro, conserva la copia local pendiente y muestra un conflicto en vez de sobrescribir silenciosamente el dato remoto. Para resolverlo, pulse el indicador **Conflicto** de la cabecera y confirme únicamente si desea reemplazar la versión remota. Los borrados también se sincronizan mediante marcas recuperables, no mediante borrado físico.
+La aplicación conserva cambios en una cola local separada por usuario cuando no hay red. Cada bitácora intenta subirse inmediatamente, se reintenta cada 15 segundos y los demás dispositivos reciben un aviso mediante Supabase Realtime para volver a consultar los datos. Al recuperar conexión usa control de versión: si otro dispositivo cambió el mismo registro, conserva la copia local pendiente y muestra un conflicto en vez de sobrescribir silenciosamente el dato remoto. Para resolverlo, pulse el indicador **Conflicto** de la cabecera y confirme únicamente si desea reemplazar la versión remota. Los borrados también se sincronizan mediante marcas recuperables, no mediante borrado físico.
+
+Si una escritura remota falla, el indicador muestra **Error** y conserva la jornada en la cola del dispositivo. Al pulsar el indicador se muestra el motivo devuelto por Supabase; no borre los datos del navegador mientras existan operaciones pendientes.
 
 Los establecimientos e indicadores forman un catálogo compartido. Solo el Administrador puede modificarlo; Supervisor y Técnico reciben automáticamente la versión vigente gracias a las políticas RLS de Supabase. El sistema rechaza duplicados y no permite renombrar o eliminar elementos que ya tengan datos históricos.
 

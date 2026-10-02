@@ -180,7 +180,7 @@ function totalVaccinatedAnimals(values = {}) {
 
 const legacyStorageKey = "saludAmbientalMunicipal.v1";
 const userStoragePrefix = "saludAmbientalMunicipal.user.v1";
-const supabaseConfigKey = "saludAmbientalMunicipal.supabase.v1";
+const supabaseConfigKey = "saludAmbientalMunicipal.supabase.override.v2";
 const cachedProfileKey = "saludAmbientalMunicipal.authProfile.v1";
 const logoutBarrierKey = "saludAmbientalMunicipal.logoutBarrier.v1";
 const AUTO_SYNC_INTERVAL_MS = 15000;
@@ -220,6 +220,9 @@ let authIntentGeneration = 0;
 let logoutBarrierActive = false;
 let logoutPromise = null;
 let autoSyncIntervalId = null;
+let realtimeChannel = null;
+let realtimeRefreshTimer = null;
+let lastSyncError = null;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => document.querySelectorAll(selector);
@@ -552,16 +555,16 @@ function saveState() {
 
 // Configuración de Supabase
 function loadSupabaseConfig() {
-  if (typeof DEFAULT_SUPABASE_CONFIG !== "undefined" && DEFAULT_SUPABASE_CONFIG.url && DEFAULT_SUPABASE_CONFIG.anonKey) {
-    return DEFAULT_SUPABASE_CONFIG;
-  }
-
   const localSaved = localStorage.getItem(supabaseConfigKey);
   if (localSaved) {
     try {
       const parsed = JSON.parse(localSaved);
       if (parsed.url && parsed.anonKey) return parsed;
     } catch (e) {}
+  }
+
+  if (typeof DEFAULT_SUPABASE_CONFIG !== "undefined" && DEFAULT_SUPABASE_CONFIG.url && DEFAULT_SUPABASE_CONFIG.anonKey) {
+    return DEFAULT_SUPABASE_CONFIG;
   }
 
   return { url: "", anonKey: "" };
@@ -586,6 +589,9 @@ function setSupabaseStatus(message, isConnected = false) {
     if (isConnected) {
       syncDot.className = "status-indicator connected";
       syncStatusText.textContent = "En línea";
+    } else if (/error|no se pudo|permiso|rechazad/i.test(message)) {
+      syncDot.className = "status-indicator";
+      syncStatusText.textContent = "Error";
     } else if (/conflicto/i.test(message)) {
       syncDot.className = "status-indicator";
       syncStatusText.textContent = "Conflicto";
@@ -641,6 +647,21 @@ function setupSupabase() {
   }
 }
 
+function syncErrorMessage(error) {
+  const code = String(error?.code || "").trim();
+  const message = String(error?.message || error || "Error desconocido").trim();
+  if (code === "42501") {
+    return "Supabase rechazó la escritura por permisos. Verifique que el perfil esté activo y aplique la migración de sincronización.";
+  }
+  if (code === "PGRST204" || code === "42703" || /column .* does not exist/i.test(message)) {
+    return "La estructura de Supabase está desactualizada. Aplique la migración de sincronización incluida en el proyecto.";
+  }
+  if (/failed to fetch|network|fetch/i.test(message)) {
+    return "No se pudo contactar a Supabase. Revise la conexión a internet e inténtelo nuevamente.";
+  }
+  return `${code ? `${code}: ` : ""}${message}`;
+}
+
 function normalizeUsername(value) {
   return String(value || "")
     .trim()
@@ -649,27 +670,11 @@ function normalizeUsername(value) {
     .toLowerCase();
 }
 
-function expectedRoleForEmail(email) {
-  const normalized = String(email || "").toLowerCase();
-  if (normalized === loginAliases.admin) return "admin";
-  if (normalized === loginAliases.supervisor) return "supervisor";
-  if (normalized === loginAliases.tecnico) return "technician";
-  return null;
-}
-
 function loginEmailForUsername(username) {
   if (loginAliases[username]) return loginAliases[username];
   return /^[a-z0-9._-]{3,32}$/.test(username)
     ? `${username}@${managedLoginDomain}`
     : null;
-}
-
-function isManagedSessionProfile(user, profile) {
-  const metadata = user?.app_metadata || {};
-  return metadata.salud_ambiental_managed === true
-    && metadata.salud_ambiental_username === normalizeUsername(profile?.username)
-    && metadata.salud_ambiental_role === profile?.role
-    && ["supervisor", "technician"].includes(profile?.role);
 }
 
 function setLoginError(message = "") {
@@ -709,6 +714,7 @@ function setLogoutBarrier(active) {
 
 function showLoginScreen(message = null) {
   stopAutomaticSync();
+  stopRealtimeSync();
   authIntentGeneration += 1;
   currentSession = null;
   currentProfile = null;
@@ -804,6 +810,7 @@ async function activateSession(session) {
   if (currentSession?.user?.id === session.user.id && currentProfile?.id === session.user.id) {
     currentSession = session;
     startAutomaticSync();
+    startRealtimeSync();
     return;
   }
 
@@ -812,10 +819,7 @@ async function activateSession(session) {
   try {
     const profile = await fetchAuthenticatedProfile(session.user);
     if (activationIntent !== authIntentGeneration || hasLogoutBarrier()) return;
-    const expectedRole = expectedRoleForEmail(session.user.email);
-    const validFixedAccount = Boolean(expectedRole && profile.role === expectedRole);
-    const validManagedAccount = isManagedSessionProfile(session.user, profile);
-    if (!profile.active || (!validFixedAccount && !validManagedAccount) || !allowedViewsByRole[profile.role]) {
+    if (!profile.active || profile.id !== session.user.id || !allowedViewsByRole[profile.role]) {
       throw new Error("La cuenta no tiene permisos válidos.");
     }
 
@@ -831,6 +835,7 @@ async function activateSession(session) {
     switchView(initialViewForRole(profile.role));
     await synchronizeWithSupabase();
     startAutomaticSync();
+    startRealtimeSync();
   } catch (error) {
     if (activationIntent !== authIntentGeneration) return;
     console.error("No se pudo activar la sesión:", error);
@@ -1118,13 +1123,13 @@ function scheduleSynchronization(delay = 500) {
 }
 
 function requestAutomaticSync() {
-  if (document.visibilityState === "hidden") return;
   if (supabaseReady && currentSession && navigator.onLine) {
     void synchronizeWithSupabase();
   }
 }
 
 function startAutomaticSync() {
+  requestAutomaticSync();
   if (autoSyncIntervalId !== null) return;
   autoSyncIntervalId = setInterval(requestAutomaticSync, AUTO_SYNC_INTERVAL_MS);
 }
@@ -1133,6 +1138,53 @@ function stopAutomaticSync() {
   if (autoSyncIntervalId === null) return;
   clearInterval(autoSyncIntervalId);
   autoSyncIntervalId = null;
+}
+
+function scheduleRealtimeRefresh() {
+  if (realtimeRefreshTimer) clearTimeout(realtimeRefreshTimer);
+  realtimeRefreshTimer = setTimeout(() => {
+    realtimeRefreshTimer = null;
+    if (syncInProgress) {
+      scheduleRealtimeRefresh();
+      return;
+    }
+    requestAutomaticSync();
+  }, 300);
+}
+
+function stopRealtimeSync() {
+  if (realtimeRefreshTimer) clearTimeout(realtimeRefreshTimer);
+  realtimeRefreshTimer = null;
+  const channel = realtimeChannel;
+  realtimeChannel = null;
+  if (channel && supabaseClient) {
+    void supabaseClient.removeChannel(channel).catch((error) => {
+      console.warn("No se pudo cerrar el canal Realtime:", error);
+    });
+  }
+}
+
+function startRealtimeSync() {
+  if (!supabaseClient || !currentSession || !currentProfile || realtimeChannel) return;
+  const generation = sessionGeneration;
+  const userId = currentSession.user.id;
+  const handleRemoteChange = () => {
+    if (generation !== sessionGeneration || currentSession?.user?.id !== userId) return;
+    scheduleRealtimeRefresh();
+  };
+
+  realtimeChannel = supabaseClient
+    .channel(`salud-ambiental-sync-${userId}-${generation}`)
+    .on("postgres_changes", { event: "*", schema: "public", table: "daily_logs" }, handleRemoteChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "monthly_entries" }, handleRemoteChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "app_catalog" }, handleRemoteChange)
+    .subscribe((status) => {
+      if (status === "SUBSCRIBED") {
+        requestAutomaticSync();
+      } else if (["CHANNEL_ERROR", "TIMED_OUT"].includes(status)) {
+        console.warn(`Canal Realtime: ${status}. El sondeo periódico continuará activo.`);
+      }
+    });
 }
 
 function queueOperation(operation) {
@@ -1593,10 +1645,10 @@ async function flushPendingOperations(resolveConflicts = false, context = null) 
         return { ok: false, fatal: false, conflicts: [] };
       }
       console.error("Error de sincronización:", error);
-      const message = error?.code === "SYNC_CONFLICT"
-        ? "Conflicto de sincronización; se conservó la copia local"
-        : "Error al sincronizar";
-      setSupabaseStatus(`${message} · ${state.pendingOperations.length} pendiente(s)`, false);
+      lastSyncError = error?.code === "SYNC_CONFLICT"
+        ? "Conflicto de sincronización; se conservó la copia local."
+        : syncErrorMessage(error);
+      setSupabaseStatus(`Error de sincronización: ${lastSyncError} · ${state.pendingOperations.length} pendiente(s)`, false);
       return { ok: false, fatal: true, conflicts };
     }
   }
@@ -1734,11 +1786,13 @@ async function syncFromSupabase(context, years = [state.year]) {
 async function synchronizeWithSupabase(resolveConflicts = false) {
   if (syncInProgress || !supabaseReady || !supabaseClient || !currentSession) return false;
   if (!navigator.onLine) {
+    lastSyncError = "Sin conexión a internet. Los datos permanecen guardados en este dispositivo.";
     setSupabaseStatus(`Sin red · ${state.pendingOperations?.length || 0} pendiente(s)`, false);
     return false;
   }
 
   syncInProgress = true;
+  lastSyncError = null;
   const revisionAtStart = queueRevision;
   const syncContext = {
     generation: sessionGeneration,
@@ -1779,6 +1833,7 @@ async function synchronizeWithSupabase(resolveConflicts = false) {
       (operation) => !logbookConflicts.includes(operation)
     );
     if (manualConflicts.length) {
+      lastSyncError = "Hay cambios simultáneos que requieren confirmación antes de continuar.";
       setSupabaseStatus(
         `Conflicto de sincronización; pulse el estado para resolver · ${state.pendingOperations.length} pendiente(s)`,
         false
@@ -1790,6 +1845,7 @@ async function synchronizeWithSupabase(resolveConflicts = false) {
     if (state.localOnlyMigrationPending) {
       setSupabaseStatus("Datos locales pendientes de subir · use “Subir Datos Locales”", false);
     } else {
+      lastSyncError = null;
       setSupabaseStatus(
         pendingCount ? `Conectado · ${pendingCount} pendiente(s)` : `Al día · ${result.logCount} jornada(s)`,
         true
@@ -1799,7 +1855,8 @@ async function synchronizeWithSupabase(resolveConflicts = false) {
   } catch (error) {
     if (error?.code === "STALE_SYNC") return false;
     console.error("No se pudo sincronizar:", error);
-    setSupabaseStatus(`Error de sincronización: ${error.message || "revise la conexión"}`, false);
+    lastSyncError = syncErrorMessage(error);
+    setSupabaseStatus(`Error de sincronización: ${lastSyncError}`, false);
     return false;
   } finally {
     syncInProgress = false;
@@ -1831,7 +1888,16 @@ async function uploadLocalEntries() {
     saveState();
     setSupabaseStatus("Al día · datos locales sincronizados", true);
   }
-  alert(success ? "Datos locales sincronizados correctamente." : "Quedaron datos pendientes. Revise el estado de conexión.");
+  alert(success
+    ? "Datos locales sincronizados correctamente."
+    : `Quedaron datos pendientes. ${lastSyncError || "Revise el estado de conexión."}`);
+}
+
+async function synchronizeFromUserAction() {
+  const success = await synchronizeWithSupabase(true);
+  if (!success && lastSyncError) {
+    alert(`No se pudo completar la sincronización.\n\n${lastSyncError}`);
+  }
 }
 
 function entryKey(reportId, year, monthIndex, facility) {
@@ -2149,7 +2215,7 @@ function openLogModal(editingLog = null) {
   dialog.showModal();
 }
 
-function saveLogFromModal() {
+async function saveLogFromModal() {
   const facility = $("#logFacilitySelect")?.value || selectedFacility();
   const editingId = $("#editingLogId").value;
   const previousLog = editingId ? state.dailyLogs?.find((log) => log.id === editingId) : null;
@@ -2209,6 +2275,10 @@ function saveLogFromModal() {
 
   saveState();
 
+  // La bitácora es el dato fuente: se encola antes de los totales derivados
+  // para que nunca quede solo en el dispositivo si falla una consolidación.
+  upsertDailyLogRemote(logRecord, previousLog);
+
   // Recalcular el origen primero si una edición cambió de período o establecimiento.
   if (previousLog && (
     previousLog.facility !== facility ||
@@ -2221,15 +2291,18 @@ function saveLogFromModal() {
   // Alimentar automáticamente los informes mensuales correspondientes.
   syncLogbookToMonthlyReports(facility, year, month);
 
-  // Sincronizar en segundo plano con Supabase si está disponible
-  upsertDailyLogRemote(logRecord, previousLog);
-  void synchronizeWithSupabase();
-
   $("#logModal").close();
   renderLogbook();
   renderForm();
   renderSummary();
   renderMonitoringGrid();
+
+  // Intenta confirmar la escritura remota ahora. Si falla, la cola local se
+  // conserva y el técnico recibe una explicación en vez de un falso "Local".
+  const synchronized = await synchronizeWithSupabase();
+  if (!synchronized && lastSyncError) {
+    alert(`La jornada quedó guardada en este dispositivo, pero aún no se pudo subir a Supabase.\n\n${lastSyncError}`);
+  }
 }
 
 // =====================================================================
@@ -3544,7 +3617,7 @@ function bindEvents() {
   });
   $("#headerLogoutBtn")?.addEventListener("click", () => void handleLogout());
   $("#sidebarLogoutBtn")?.addEventListener("click", () => void handleLogout());
-  $("#syncStatusBadge")?.addEventListener("click", () => void synchronizeWithSupabase(true));
+  $("#syncStatusBadge")?.addEventListener("click", () => void synchronizeFromUserAction());
 
   // Navegación escritorio y móvil
   $$(".nav-button, .bottom-nav-item").forEach((btn) => {
@@ -3572,7 +3645,7 @@ function bindEvents() {
 
   $("#logForm")?.addEventListener("submit", (e) => {
     e.preventDefault();
-    saveLogFromModal();
+    void saveLogFromModal();
   });
 
   $("#syncLogbookToMonthlyBtn")?.addEventListener("click", () => {
@@ -3805,7 +3878,7 @@ function bindEvents() {
     window.location.reload();
   });
 
-  $("#syncSupabaseBtn")?.addEventListener("click", () => void synchronizeWithSupabase(true));
+  $("#syncSupabaseBtn")?.addEventListener("click", () => void synchronizeFromUserAction());
   $("#uploadLocalBtn")?.addEventListener("click", uploadLocalEntries);
 
   window.addEventListener("online", () => {
@@ -3843,7 +3916,7 @@ init();
 
 if ("serviceWorker" in navigator && location.protocol !== "file:") {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js?v=13", { updateViaCache: "none" }).catch((error) => {
+    navigator.serviceWorker.register("./sw.js?v=14", { updateViaCache: "none" }).catch((error) => {
       console.warn("No se pudo registrar el modo offline:", error);
     });
   });

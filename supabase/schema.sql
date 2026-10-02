@@ -433,23 +433,8 @@ set search_path = ''
 as $$
   select profiles.role
   from public.profiles as profiles
-  join auth.users as users on users.id = profiles.id
   where profiles.id = auth.uid()
     and profiles.active = true
-    and (
-      (lower(users.email) = '1999cazg@gmail.com'
-        and profiles.username = 'Admin' and profiles.role = 'admin')
-      or (lower(users.email) = 'supervisor@saludambiental.local'
-        and profiles.username = 'Supervisor' and profiles.role = 'supervisor')
-      or (lower(users.email) = 'tecnico@saludambiental.local'
-        and profiles.username = 'Tecnico' and profiles.role = 'technician')
-      or (
-        users.raw_app_meta_data ->> 'salud_ambiental_managed' = 'true'
-        and lower(profiles.username) = lower(users.raw_app_meta_data ->> 'salud_ambiental_username')
-        and profiles.role = users.raw_app_meta_data ->> 'salud_ambiental_role'
-        and profiles.role in ('supervisor', 'technician')
-      )
-    )
   limit 1
 $$;
 
@@ -806,3 +791,33 @@ grant select, insert, update on table public.daily_logs to authenticated;
 -- Si las tres cuentas ya existen, las activa ahora. Si se crean después,
 -- vuelva a ejecutar: select public.configure_fixed_accounts();
 select public.configure_fixed_accounts();
+
+-- ================================================================
+-- ACTUALIZACIÓN ENTRE DISPOSITIVOS
+-- ================================================================
+-- Realtime solo actúa como aviso. El cliente vuelve a consultar las tablas,
+-- por lo que el sondeo periódico sigue siendo la fuente de recuperación.
+do $$
+begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'daily_logs'
+    ) then
+      alter publication supabase_realtime add table public.daily_logs;
+    end if;
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'monthly_entries'
+    ) then
+      alter publication supabase_realtime add table public.monthly_entries;
+    end if;
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'app_catalog'
+    ) then
+      alter publication supabase_realtime add table public.app_catalog;
+    end if;
+  end if;
+end
+$$;
