@@ -3921,7 +3921,7 @@ init();
 
 if ("serviceWorker" in navigator && location.protocol !== "file:") {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js?v=16", { updateViaCache: "none" }).catch((error) => {
+    navigator.serviceWorker.register("./sw.js?v=17", { updateViaCache: "none" }).catch((error) => {
       console.warn("No se pudo registrar el modo offline:", error);
     });
   });

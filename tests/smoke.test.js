@@ -394,18 +394,24 @@ test("PWA assets referenced by the document exist", () => {
   assert.equal(fs.existsSync(path.join(root, "manifest.webmanifest")), true);
   assert.equal(fs.existsSync(path.join(root, "sw.js")), true);
   assert.equal(fs.existsSync(path.join(root, "icon.svg")), true);
-  assert.match(html, /styles\.css\?v=16/);
-  assert.match(html, /config\.js\?v=16/);
-  assert.match(html, /app\.js\?v=16/);
-  assert.match(app, /register\("\.\/sw\.js\?v=16", \{ updateViaCache: "none" \}\)/);
-  assert.match(serviceWorker, /salud-ambiental-v16/);
-  assert.match(serviceWorker, /\.\/app\.js\?v=16/);
+  assert.match(html, /styles\.css\?v=17/);
+  assert.match(html, /config\.js\?v=17/);
+  assert.match(html, /app\.js\?v=17/);
+  assert.match(app, /register\("\.\/sw\.js\?v=17", \{ updateViaCache: "none" \}\)/);
+  assert.match(serviceWorker, /salud-ambiental-v17/);
+  assert.match(serviceWorker, /\.\/app\.js\?v=17/);
 });
 
-test("tables are centered and long headers are limited to two lines", () => {
+test("tables are centered and long headers are limited to three lines", () => {
   assert.match(css, /th, td\s*\{[\s\S]*?text-align:\s*center/);
-  assert.match(css, /\.table-header-label\s*\{[\s\S]*?-webkit-line-clamp:\s*2/);
+  assert.match(css, /\.table-header-label\s*\{[\s\S]*?-webkit-line-clamp:\s*3/);
   assert.match(app, /class="table-header-label"/);
+});
+
+test("wide report columns are equitable and numeric values stay centered", () => {
+  assert.match(css, /#summaryTable th,[\s\S]*?#summaryTable td\s*\{[\s\S]*?min-width:\s*150px/);
+  assert.match(css, /#summaryTable tbody td:not\(:first-child\)[\s\S]*?text-align:\s*center/);
+  assert.match(css, /font-variant-numeric:\s*tabular-nums/);
 });
 
 test("mobile navigation shares the full width among visible role actions", () => {
