@@ -17,6 +17,7 @@ const manageUsers = read("supabase/functions/manage-users/index.ts");
 const supabaseConfig = read("supabase/config.toml");
 const seedCatalogMigration = read("supabase/migrations/20261002133000_seed_app_catalog.sql");
 const catalogGuardMigration = read("supabase/migrations/20261002140000_catalog_guard_definer.sql");
+const splitCatalogTriggerMigration = read("supabase/migrations/20261002143000_split_catalog_trigger_validation.sql");
 
 function bootApp(storageEntries = []) {
   const storage = new Map(storageEntries);
@@ -195,6 +196,8 @@ test("shared catalog is readable by active users and writable only by admin", ()
   assert.match(seedCatalogMigration, /Cornelio Moncada/);
   assert.match(catalogGuardMigration, /security definer/i);
   assert.match(catalogGuardMigration, /from public\.app_catalog/i);
+  assert.match(splitCatalogTriggerMigration, /if tg_table_name = 'monthly_entries' then\s+if exists/i);
+  assert.doesNotMatch(splitCatalogTriggerMigration, /tg_table_name = 'monthly_entries' and exists/i);
 });
 
 test("daily log IDs and offline writes use the safe queue", () => {

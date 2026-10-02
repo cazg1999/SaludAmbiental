@@ -559,19 +559,21 @@ begin
       using errcode = '22023';
   end if;
 
-  if tg_table_name = 'monthly_entries' and exists (
-    select 1
-    from pg_catalog.jsonb_object_keys(new.values) as value_key(field_slug)
-    where not exists (
+  if tg_table_name = 'monthly_entries' then
+    if exists (
       select 1
-      from pg_catalog.jsonb_array_elements_text(
-        catalog_report_fields -> new.report_id
-      ) as allowed_field(label)
-      where public.catalog_slug(allowed_field.label) = value_key.field_slug
-    )
-  ) then
-    raise exception 'El registro contiene indicadores fuera del catálogo vigente'
-      using errcode = '23503';
+      from pg_catalog.jsonb_object_keys(new.values) as value_key(field_slug)
+      where not exists (
+        select 1
+        from pg_catalog.jsonb_array_elements_text(
+          catalog_report_fields -> new.report_id
+        ) as allowed_field(label)
+        where public.catalog_slug(allowed_field.label) = value_key.field_slug
+      )
+    ) then
+      raise exception 'El registro contiene indicadores fuera del catálogo vigente'
+        using errcode = '23503';
+    end if;
   end if;
 
   return new;
