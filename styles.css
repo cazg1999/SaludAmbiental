@@ -856,11 +856,11 @@ label {
   background: #eaf2ee;
   color: #133930;
   font-weight: 700;
-  text-align: left;
+  text-align: center;
 }
 
 .formal-table td.num-cell, .formal-table th.num-cell {
-  text-align: right;
+  text-align: center;
   font-weight: 600;
 }
 
@@ -915,7 +915,7 @@ table {
 th, td {
   padding: 9px 12px;
   border-bottom: 1px solid var(--line);
-  text-align: right;
+  text-align: center;
   white-space: nowrap;
 }
 
@@ -923,10 +923,24 @@ th {
   background: #eef5f2;
   color: #193f35;
   font-weight: 700;
+  text-align: center;
+  vertical-align: middle;
+  white-space: normal;
+}
+
+.table-header-label {
+  display: -webkit-box;
+  overflow: hidden;
+  max-height: 2.4em;
+  line-height: 1.2;
+  text-align: center;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 td:first-child, th:first-child {
-  text-align: left;
+  text-align: center;
   position: sticky;
   left: 0;
   background: inherit;
@@ -1398,7 +1412,7 @@ tbody tr:hover {
 }
 
 /* =====================================================================
-   NAVEGACIÓN MÓVIL INFERIOR (BOTTOM BAR - 5 PESTAÑAS)
+   NAVEGACIÓN MÓVIL INFERIOR (DISTRIBUCIÓN SEGÚN EL ROL)
    ===================================================================== */
 .bottom-nav {
   display: none;
@@ -1411,11 +1425,12 @@ tbody tr:hover {
   border-top: 1px solid var(--line);
   box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.06);
   z-index: 100;
-  grid-template-columns: repeat(5, 1fr);
 }
 
 .bottom-nav-item {
   display: flex;
+  flex: 1 1 0;
+  min-width: 0;
   flex-direction: column;
   align-items: center;
   justify-content: center;
@@ -1427,6 +1442,10 @@ tbody tr:hover {
   min-height: 100%;
   cursor: pointer;
   transition: color 0.15s ease;
+}
+
+.bottom-nav-item[hidden] {
+  display: none;
 }
 
 .bottom-nav-item .b-icon {
@@ -1460,7 +1479,7 @@ tbody tr:hover {
   }
 
   .bottom-nav {
-    display: grid;
+    display: flex;
   }
 
   .app-main {

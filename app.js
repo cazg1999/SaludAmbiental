@@ -2423,9 +2423,9 @@ function renderFacilityReport() {
   let rowsHtml = `
     <thead>
       <tr>
-        <th style="width: 45px;">No.</th>
-        <th>Actividad / Indicador de Salud Ambiental</th>
-        <th class="num-cell" style="width: 140px;">Cantidad / Total</th>
+        <th style="width: 45px;"><span class="table-header-label">No.</span></th>
+        <th><span class="table-header-label">Actividad / Indicador de Salud Ambiental</span></th>
+        <th class="num-cell" style="width: 140px;"><span class="table-header-label">Cantidad / Total</span></th>
       </tr>
     </thead>
     <tbody>
@@ -2446,7 +2446,7 @@ function renderFacilityReport() {
 
   rowsHtml += `
     <tr style="font-weight: bold; background: #eef5f2;">
-      <td colspan="2" style="text-align: right;">Suma de actividades reportadas:</td>
+      <td colspan="2">Suma de actividades reportadas:</td>
       <td class="num-cell">${totalGeneral.toLocaleString("es-HN")}</td>
     </tr>
     </tbody>
@@ -2464,11 +2464,11 @@ function renderMonitoringGrid() {
   const table = $("#monitoringGridTable");
   if (!table) return;
 
-  let html = `<thead><tr><th>Establecimiento</th>`;
+  let html = `<thead><tr><th><span class="table-header-label">Establecimiento</span></th>`;
   months.forEach((m) => {
-    html += `<th>${m.slice(0, 3)}</th>`;
+    html += `<th><span class="table-header-label">${m.slice(0, 3)}</span></th>`;
   });
-  html += `<th>Avance</th></tr></thead><tbody>`;
+  html += `<th><span class="table-header-label">Avance</span></th></tr></thead><tbody>`;
 
   state.facilities.forEach((fac) => {
     const safeFacility = escapeHtml(fac);
@@ -2584,7 +2584,7 @@ function renderSummary() {
   ];
 
   $("#summaryTable").innerHTML = `
-    <thead><tr>${head.map((cell) => `<th>${escapeHtml(cell)}</th>`).join("")}</tr></thead>
+    <thead><tr>${head.map((cell) => `<th><span class="table-header-label" title="${escapeHtml(cell)}">${escapeHtml(cell)}</span></th>`).join("")}</tr></thead>
     <tbody>
       ${rows.map((row) => `<tr>${row.map((cell, index) => `<td>${index === 0 ? escapeHtml(cell) : Number(cell).toLocaleString("es-HN")}</td>`).join("")}</tr>`).join("")}
       <tr style="font-weight: 800; background: #eaf4ef;">${municipalRow.map((cell, index) => `<th>${index === 0 ? escapeHtml(cell) : Number(cell).toLocaleString("es-HN")}</th>`).join("")}</tr>
@@ -3921,7 +3921,7 @@ init();
 
 if ("serviceWorker" in navigator && location.protocol !== "file:") {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js?v=15", { updateViaCache: "none" }).catch((error) => {
+    navigator.serviceWorker.register("./sw.js?v=16", { updateViaCache: "none" }).catch((error) => {
       console.warn("No se pudo registrar el modo offline:", error);
     });
   });

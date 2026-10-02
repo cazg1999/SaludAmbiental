@@ -394,12 +394,24 @@ test("PWA assets referenced by the document exist", () => {
   assert.equal(fs.existsSync(path.join(root, "manifest.webmanifest")), true);
   assert.equal(fs.existsSync(path.join(root, "sw.js")), true);
   assert.equal(fs.existsSync(path.join(root, "icon.svg")), true);
-  assert.match(html, /styles\.css\?v=15/);
-  assert.match(html, /config\.js\?v=15/);
-  assert.match(html, /app\.js\?v=15/);
-  assert.match(app, /register\("\.\/sw\.js\?v=15", \{ updateViaCache: "none" \}\)/);
-  assert.match(serviceWorker, /salud-ambiental-v15/);
-  assert.match(serviceWorker, /\.\/app\.js\?v=15/);
+  assert.match(html, /styles\.css\?v=16/);
+  assert.match(html, /config\.js\?v=16/);
+  assert.match(html, /app\.js\?v=16/);
+  assert.match(app, /register\("\.\/sw\.js\?v=16", \{ updateViaCache: "none" \}\)/);
+  assert.match(serviceWorker, /salud-ambiental-v16/);
+  assert.match(serviceWorker, /\.\/app\.js\?v=16/);
+});
+
+test("tables are centered and long headers are limited to two lines", () => {
+  assert.match(css, /th, td\s*\{[\s\S]*?text-align:\s*center/);
+  assert.match(css, /\.table-header-label\s*\{[\s\S]*?-webkit-line-clamp:\s*2/);
+  assert.match(app, /class="table-header-label"/);
+});
+
+test("mobile navigation shares the full width among visible role actions", () => {
+  assert.match(css, /\.bottom-nav-item\s*\{[\s\S]*?flex:\s*1 1 0/);
+  assert.match(css, /\.bottom-nav-item\[hidden\]\s*\{\s*display:\s*none/);
+  assert.match(css, /@media \(max-width: 860px\)[\s\S]*?\.bottom-nav\s*\{\s*display:\s*flex/);
 });
 
 test("app boots fail-closed without Supabase configuration", () => {
