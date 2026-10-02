@@ -520,7 +520,7 @@ grant execute on function public.catalog_slug(text) to authenticated;
 create or replace function public.guard_operational_catalog()
 returns trigger
 language plpgsql
-security invoker
+security definer
 set search_path = ''
 as $$
 declare

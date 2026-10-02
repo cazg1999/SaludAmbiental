@@ -16,6 +16,7 @@ const schema = read("supabase/schema.sql");
 const manageUsers = read("supabase/functions/manage-users/index.ts");
 const supabaseConfig = read("supabase/config.toml");
 const seedCatalogMigration = read("supabase/migrations/20261002133000_seed_app_catalog.sql");
+const catalogGuardMigration = read("supabase/migrations/20261002140000_catalog_guard_definer.sql");
 
 function bootApp(storageEntries = []) {
   const storage = new Map(storageEntries);
@@ -192,6 +193,8 @@ test("shared catalog is readable by active users and writable only by admin", ()
   assert.match(seedCatalogMigration, /insert into public\.app_catalog/i);
   assert.match(seedCatalogMigration, /on conflict \(id\) do nothing/i);
   assert.match(seedCatalogMigration, /Cornelio Moncada/);
+  assert.match(catalogGuardMigration, /security definer/i);
+  assert.match(catalogGuardMigration, /from public\.app_catalog/i);
 });
 
 test("daily log IDs and offline writes use the safe queue", () => {
@@ -388,12 +391,12 @@ test("PWA assets referenced by the document exist", () => {
   assert.equal(fs.existsSync(path.join(root, "manifest.webmanifest")), true);
   assert.equal(fs.existsSync(path.join(root, "sw.js")), true);
   assert.equal(fs.existsSync(path.join(root, "icon.svg")), true);
-  assert.match(html, /styles\.css\?v=14/);
-  assert.match(html, /config\.js\?v=14/);
-  assert.match(html, /app\.js\?v=14/);
-  assert.match(app, /register\("\.\/sw\.js\?v=14", \{ updateViaCache: "none" \}\)/);
-  assert.match(serviceWorker, /salud-ambiental-v14/);
-  assert.match(serviceWorker, /\.\/app\.js\?v=14/);
+  assert.match(html, /styles\.css\?v=15/);
+  assert.match(html, /config\.js\?v=15/);
+  assert.match(html, /app\.js\?v=15/);
+  assert.match(app, /register\("\.\/sw\.js\?v=15", \{ updateViaCache: "none" \}\)/);
+  assert.match(serviceWorker, /salud-ambiental-v15/);
+  assert.match(serviceWorker, /\.\/app\.js\?v=15/);
 });
 
 test("app boots fail-closed without Supabase configuration", () => {

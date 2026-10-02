@@ -1894,6 +1894,11 @@ async function uploadLocalEntries() {
 }
 
 async function synchronizeFromUserAction() {
+  if (syncInProgress) {
+    scheduleSynchronization(250);
+    setSupabaseStatus("Sincronización en curso...", false);
+    return;
+  }
   const success = await synchronizeWithSupabase(true);
   if (!success && lastSyncError) {
     alert(`No se pudo completar la sincronización.\n\n${lastSyncError}`);
@@ -3916,7 +3921,7 @@ init();
 
 if ("serviceWorker" in navigator && location.protocol !== "file:") {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js?v=14", { updateViaCache: "none" }).catch((error) => {
+    navigator.serviceWorker.register("./sw.js?v=15", { updateViaCache: "none" }).catch((error) => {
       console.warn("No se pudo registrar el modo offline:", error);
     });
   });
